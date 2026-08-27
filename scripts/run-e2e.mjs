@@ -4,9 +4,21 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import {
+  LIVE_SECRET_NAMES,
+  assertNoLiveSecrets,
+  parseLiveSecretFile,
+  stripLiveSecrets,
+  takeLiveSecrets,
+} from './e2e-secrets.mjs'
 
 const mode = process.argv[2]
 if (mode !== 'mock' && mode !== 'live') throw new Error('Expected E2E mode: mock or live')
+
+// Capture secrets in this dependency-free coordinator, then remove them from the
+// ambient environment before any package manager, build, pack, or browser process starts.
+const inheritedLiveSecrets = takeLiveSecrets(process.env)
+for (const name of LIVE_SECRET_NAMES) delete process.env[name]
 
 const root = resolve(import.meta.dirname, '..')
 const runRoot = mkdtempSync(join(tmpdir(), `dsh-speech-e2e-${mode}-`))
@@ -94,40 +106,44 @@ function createWorkspaceFixture() {
   }, null, 2)}\n`)
 }
 
-function loadLocalSecrets() {
+function loadLocalSecrets(initial) {
   const path = join(root, '.secrets')
   let contents
   try {
     contents = readFileSync(path, 'utf8')
   } catch (error) {
-    if (error?.code === 'ENOENT') return
+    if (error?.code === 'ENOENT') return initial
     throw error
   }
-  for (const line of contents.split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?(ALLMODELS_API_KEY|DEEPSEEK_API_KEY)\s*=\s*(.*?)\s*$/)
-    if (!match || process.env[match[1]]) continue
-    const raw = match[2]
-    process.env[match[1]] = raw.length >= 2 && raw[0] === raw.at(-1) && (raw[0] === '"' || raw[0] === "'")
-      ? raw.slice(1, -1)
-      : raw
-  }
+  return parseLiveSecretFile(contents, initial)
+}
+
+function childEnvironment(options = {}) {
+  const env = stripLiveSecrets({ ...process.env, CI: process.env.CI ?? 'true', ...options.env })
+  if (options.allowSecrets === true) Object.assign(env, options.secrets)
+  else assertNoLiveSecrets(env, options.label ?? 'child process')
+  for (const key of options.unsetEnv ?? []) delete env[key]
+  return env
 }
 
 function run(command, args, options = {}) {
-  execFileSync(command, args, { cwd: root, stdio: 'inherit', env: { ...process.env, CI: process.env.CI ?? 'true', ...options.env } })
+  execFileSync(command, args, { cwd: root, stdio: 'inherit', env: childEnvironment({ ...options, label: command }) })
 }
 
 function start(command, args, options = {}) {
-  const env = { ...process.env, CI: process.env.CI ?? 'true', ...options.env }
-  for (const key of options.unsetEnv ?? []) delete env[key]
   const child = spawn(command, args, {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env,
+    env: childEnvironment({ ...options, label: command }),
   })
   children.push(child)
-  child.stdout.on('data', chunk => { process.stdout.write(chunk) })
-  child.stderr.on('data', chunk => { process.stderr.write(chunk) })
+  if (options.quiet === true) {
+    child.stdout.resume()
+    child.stderr.resume()
+  } else {
+    child.stdout.on('data', chunk => { process.stdout.write(chunk) })
+    child.stderr.on('data', chunk => { process.stderr.write(chunk) })
+  }
   return child
 }
 
@@ -169,7 +185,7 @@ async function main() {
   const packResult = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', packageDir], {
     cwd: root,
     encoding: 'utf8',
-    env: { ...process.env, CI: process.env.CI ?? 'true' },
+    env: childEnvironment({ label: 'npm pack' }),
   })
   const pack = JSON.parse(packResult)
   const filename = pack?.[0]?.filename
@@ -182,15 +198,16 @@ async function main() {
   })
 
   let mock
+  let liveSecrets = {}
   if (mode === 'mock') {
     mock = start(process.execPath, ['tests/e2e/mock-allmodels.mjs'], {
       env: { DSH_SPEECH_MOCK_PORT: String(mockPort) },
     })
     await waitFor(`http://127.0.0.1:${String(mockPort)}/health`, mock, 'mock AllModels server')
   } else {
-    loadLocalSecrets()
-    if (!process.env.ALLMODELS_API_KEY) throw new Error('ALLMODELS_API_KEY is required for live E2E tests')
-    if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is required for live E2E tests')
+    liveSecrets = loadLocalSecrets(inheritedLiveSecrets)
+    if (!liveSecrets.ALLMODELS_API_KEY) throw new Error('ALLMODELS_API_KEY is required for live E2E tests')
+    if (!liveSecrets.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is required for live E2E tests')
   }
 
   const dshArgs = [
@@ -202,8 +219,10 @@ async function main() {
     env: {
       DSH_HOME: dshHome,
       DSH_TELEMETRY_MODE: 'DISABLED',
-      ...(mode === 'mock' ? { DEEPSEEK_API_KEY: 'mock-deepseek-key' } : {}),
     },
+    allowSecrets: true,
+    secrets: mode === 'mock' ? { DEEPSEEK_API_KEY: 'mock-deepseek-key' } : liveSecrets,
+    quiet: mode === 'live',
     unsetEnv: mode === 'mock' ? ['ALLMODELS_API_KEY'] : [],
   })
   await waitFor(baseURL, harness, 'DeepSeek Harness')

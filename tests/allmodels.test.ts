@@ -24,9 +24,9 @@ describe('AllModels HTTP client', () => {
   })
 
   it('stores no secret in surfaced network errors', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"message":"Unauthorized"}', { status: 401 })))
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"message":"Rejected secret-value"}', { status: 401 })))
     await expect(requestJson(settings.baseURL, '/account/balance', {}, 'secret-value'))
-      .rejects.toMatchObject({ status: 401, code: 'HTTP_401', message: 'Unauthorized' })
+      .rejects.toMatchObject({ status: 401, code: 'HTTP_401', message: 'AllModels rejected the authenticated request' })
   })
 
   it('validates a pasted key through the balance endpoint shape', async () => {

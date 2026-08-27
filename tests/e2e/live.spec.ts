@@ -3,6 +3,8 @@ import { composerInput, loadHarness, microphoneButton, openSpeechSettings } from
 
 test('real AllModels and DeepSeek credentials support a trusted main-branch smoke run', async ({ page }) => {
   test.setTimeout(120_000)
+  expect(process.env.ALLMODELS_API_KEY).toBeUndefined()
+  expect(process.env.DEEPSEEK_API_KEY).toBeUndefined()
   await loadHarness(page)
 
   const dialog = await openSpeechSettings(page)

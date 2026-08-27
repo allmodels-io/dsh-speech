@@ -38,9 +38,10 @@ test('virtual microphone streams, commits, unlocks, and never auto-sends', async
   expect(takeoverBox!.x + takeoverBox!.width).toBeLessThanOrEqual(1280)
 
   const firstWave = await canvas.evaluate(element => (element as HTMLCanvasElement).toDataURL())
-  await page.waitForTimeout(250)
-  const nextWave = await canvas.evaluate(element => (element as HTMLCanvasElement).toDataURL())
-  expect(nextWave).not.toBe(firstWave)
+  await expect.poll(
+    async () => canvas.evaluate(element => (element as HTMLCanvasElement).toDataURL()),
+    { timeout: 2_000, intervals: [80, 120, 180, 250] },
+  ).not.toBe(firstWave)
 
   await expect(page.getByRole('button', { name: /Access mode/u })).toBeHidden()
   await expect(page.getByRole('button', { name: /Select model/u })).toBeHidden()

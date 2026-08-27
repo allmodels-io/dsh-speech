@@ -133,7 +133,7 @@ ALLMODELS_API_KEY=...
 DEEPSEEK_API_KEY=...
 ```
 
-Then run `pnpm test:e2e:live`. The live test checks the environment-managed AllModels account, starts and stops a real streaming STT connection using the virtual microphone, sends a minimal DeepSeek request, and verifies microphone placement in both new-chat and existing-session layouts. It consumes a small amount of API balance.
+Then run `pnpm test:e2e:live`. The live test checks the environment-managed AllModels account, starts and stops a real streaming STT connection using the virtual microphone, sends a minimal DeepSeek request, and verifies microphone placement in both new-chat and existing-session layouts. It consumes a small amount of API balance. The coordinator removes both credentials from its ambient environment before starting build, package-manager, and Playwright children; only the isolated Harness process receives them. Live Harness output and Playwright traces, screenshots, videos, HTML reports, and artifact uploads are disabled so credentials cannot be reflected into CI diagnostics.
 
 ## Release
 

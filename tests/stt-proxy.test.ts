@@ -41,6 +41,8 @@ describe('STT proxy protocol', () => {
       .toEqual({ type: 'final', sequence: 5, text: 'hello', languageCode: 'en' })
     expect(normalizedEvent(Buffer.from('{"type":"stt.error","code":"BALANCE","message":"empty"}')))
       .toEqual({ type: 'error', code: 'BALANCE', message: 'empty' })
+    expect(normalizedEvent(Buffer.from('{"type":"stt.error","code":"AUTH","message":"Rejected secret-value"}'), 'secret-value'))
+      .toEqual({ type: 'error', code: 'AUTH', message: 'Speech recognition failed' })
     expect(normalizedEvent(Buffer.from('{"type":"stt.session.ended"}'))).toEqual({ type: 'ended' })
   })
 })

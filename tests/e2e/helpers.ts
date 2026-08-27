@@ -30,7 +30,7 @@ async function dismissHarnessFirstRun(page: Page): Promise<void> {
 }
 
 export async function loadHarness(page: Page): Promise<void> {
-  page.on('console', message => {
+  if (process.env.DSH_SPEECH_E2E_MODE !== 'live') page.on('console', message => {
     if (message.type() === 'warning' || message.type() === 'error') {
       console.log(`browser ${message.type()}: ${message.text()}`)
     }

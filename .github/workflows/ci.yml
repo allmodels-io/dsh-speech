@@ -18,9 +18,9 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.22.0
           cache: pnpm
@@ -33,9 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.22.0
           cache: pnpm
@@ -44,7 +44,7 @@ jobs:
       - run: pnpm test:e2e
       - name: Upload browser diagnostics
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: playwright-mock-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -58,31 +58,17 @@ jobs:
     needs: browser-e2e
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      ALLMODELS_API_KEY: ${{ secrets.ALLMODELS_API_KEY }}
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.22.0
           cache: pnpm
-      - name: Require live-test secrets
-        shell: bash
-        run: |
-          test -n "$ALLMODELS_API_KEY" || { echo 'ALLMODELS_API_KEY is not configured'; exit 1; }
-          test -n "$DEEPSEEK_API_KEY" || { echo 'DEEPSEEK_API_KEY is not configured'; exit 1; }
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e:live
-      - name: Upload live browser diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: playwright-live-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 14
+      - name: Run live browser smoke test
+        run: node scripts/run-e2e.mjs live
+        env:
+          ALLMODELS_API_KEY: ${{ secrets.ALLMODELS_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
