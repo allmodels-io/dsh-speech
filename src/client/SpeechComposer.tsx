@@ -37,6 +37,14 @@ function CheckIcon(): ReactNode {
   )
 }
 
+function CloseIcon(): ReactNode {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="m5.5 5.5 9 9m0-9-9 9" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 const WAVEFORM_PITCH = 4
 const WAVEFORM_BASELINE = 0.025
 
@@ -112,17 +120,31 @@ function RecordingWaveform({ amplitude }: { amplitude: number }): ReactNode {
   return <canvas ref={canvasRef} className={styles.recordingCanvas} aria-hidden="true" />
 }
 
-function RecordingTakeover({ amplitude, disabled, phase, label, onStop, stopLabel }: {
+function RecordingTakeover({ amplitude, cancelLabel, disabled, phase, label, onCancel, onStop, stopLabel }: {
   amplitude: number
+  cancelLabel: string
   disabled: boolean
   phase: 'starting' | 'recording' | 'finalizing'
   label: string
+  onCancel: () => void
   onStop: () => void
   stopLabel: string
 }): ReactNode {
   const recording = phase === 'recording'
   return (
     <div className={styles.recordingTakeover} data-phase={phase}>
+      {recording ? (
+        <button
+          type="button"
+          className={`${styles.mic} ${styles.recordingCancel}`}
+          disabled={disabled}
+          aria-label={cancelLabel}
+          title={cancelLabel}
+          onClick={onCancel}
+        >
+          <CloseIcon />
+        </button>
+      ) : null}
       <div className={styles.recordingTrack}>
         {recording ? <RecordingWaveform amplitude={amplitude} /> : (
           <span className={styles.recordingProgress} role="status" aria-live="polite">
@@ -196,10 +218,12 @@ export function SpeechMic({ controller, getLocale, sessionId, input, inputAction
     return (
       <RecordingTakeover
         amplitude={state.amplitude}
+        cancelLabel={t('micCancel')}
         disabled={disabled}
         phase={takeoverPhase}
         label={state.phase === 'starting' ? t('starting')
           : state.phase === 'finalizing' ? t('finalizing') : t('listening')}
+        onCancel={() => { controller.cancel() }}
         onStop={toggle}
         stopLabel={title}
       />

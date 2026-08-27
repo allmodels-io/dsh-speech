@@ -136,6 +136,13 @@ export class SpeechController {
     await stoppingCapture
   }
 
+  cancel(): void {
+    const active = this.active
+    if (active === undefined || active.finished) return
+    active.inputActions.setDraft(active.draft)
+    this.finish(active)
+  }
+
   async switchMicrophone(deviceId: string): Promise<void> {
     const active = this.active
     if (active === undefined || active.finished || this.snapshot.phase !== 'recording') return

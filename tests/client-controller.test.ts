@@ -41,4 +41,38 @@ describe('recording stop latency', () => {
     await stopping
     if ('finalTimer' in active && typeof active.finalTimer === 'number') clearTimeout(active.finalTimer)
   })
+
+  it('cancels without committing and restores the exact pre-recording draft', () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1, CLOSING: 2 })
+    const setDraft = vi.fn()
+    const send = vi.fn()
+    const close = vi.fn()
+    const captureStop = vi.fn(async () => {})
+    const clearBlock = vi.fn()
+    const controller = new SpeechController()
+    const active = {
+      sessionId: 'session-1',
+      draft: 'Exact existing draft',
+      inputActions: { setDraft },
+      locale: 'en',
+      listeningReason: 'Listening',
+      socket: { readyState: 1, send, close },
+      capture: { stop: captureStop },
+      transcript: createTranscript('Exact existing draft'),
+      finished: false,
+    }
+    ;(controller as unknown as { active: typeof active }).active = active
+    controller.attachBlocks({ set: clearBlock })
+
+    controller.cancel()
+
+    expect(setDraft).toHaveBeenCalledOnce()
+    expect(setDraft).toHaveBeenCalledWith('Exact existing draft')
+    expect(send.mock.calls.map(call => JSON.parse(String(call[0])))).toEqual([{ type: 'close' }])
+    expect(send).not.toHaveBeenCalledWith(JSON.stringify({ type: 'commit' }))
+    expect(captureStop).toHaveBeenCalledOnce()
+    expect(close).toHaveBeenCalledWith(1000, 'recording complete')
+    expect(clearBlock).toHaveBeenCalledWith('session-1', undefined)
+    expect(controller.getSnapshot().phase).toBe('idle')
+  })
 })

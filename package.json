@@ -1,6 +1,6 @@
 {
   "name": "@allmodels/dsh-speech",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Streaming speech-to-text for DeepSeek Harness using AllModels.io.",
   "keywords": [
     "dsh-plugin",

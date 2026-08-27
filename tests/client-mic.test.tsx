@@ -25,6 +25,7 @@ function withMicrophones(snapshot: SnapshotInput): SpeechClientState {
 function renderMic(inputSnapshot: SnapshotInput) {
   const snapshot = withMicrophones(inputSnapshot)
   const toggle = vi.fn(async () => {})
+  const cancel = vi.fn()
   const reportError = vi.fn()
   const controller = {
     getSnapshot: () => snapshot,
@@ -32,6 +33,7 @@ function renderMic(inputSnapshot: SnapshotInput) {
     ensureMetadata: vi.fn(async () => {}),
     release: vi.fn(),
     toggle,
+    cancel,
     reportError,
   } as unknown as SpeechController
   const inputActions = { setDraft: vi.fn(), addImages: vi.fn(), removeImage: vi.fn(), pruneImages: vi.fn(), submit: vi.fn() }
@@ -44,7 +46,7 @@ function renderMic(inputSnapshot: SnapshotInput) {
     t,
     useSession: vi.fn(), useProjection: vi.fn(), useSessions: vi.fn(), useWorkspaces: vi.fn(),
   }
-  return { ...render(createElement(SpeechMic, props as never)), toggle, reportError, inputActions }
+  return { ...render(createElement(SpeechMic, props as never)), toggle, cancel, reportError, inputActions }
 }
 
 function renderDock(inputSnapshot: SnapshotInput, showMetrics = true) {
@@ -145,7 +147,24 @@ describe('composer microphone', () => {
     const takeover = view.container.querySelector('.dsh-speech-recording-takeover')
     expect(takeover).toBeTruthy()
     expect(takeover?.querySelector('canvas')?.getAttribute('aria-hidden')).toBe('true')
+    const cancel = view.getByRole('button', { name: en.micCancel })
+    expect(cancel).toBeTruthy()
+    expect(takeover?.firstElementChild).toBe(cancel)
     expect(view.getByRole('button', { name: en.micStop })).toBeTruthy()
+  })
+
+  it('cancels an active recording without invoking Stop', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    const view = renderMic({
+      phase: 'recording',
+      activeSessionId: 'session-1' as never,
+      amplitude: 0.4,
+      metadataLoading: false,
+    })
+
+    fireEvent.click(view.getByRole('button', { name: en.micCancel }))
+    expect(view.cancel).toHaveBeenCalledOnce()
+    expect(view.toggle).not.toHaveBeenCalled()
   })
 
   it('shows preparation status without starting the waveform before capture is ready', () => {
