@@ -49,7 +49,11 @@ export async function requestJson(
     const response = await fetch(endpoint(baseURL, path), { ...init, headers, signal: controller.signal })
     const body: unknown = await response.json().catch(() => undefined)
     if (!response.ok) {
-      throw new AllModelsError(response.status, `HTTP_${String(response.status)}`, errorMessage(body, 'AllModels request failed'))
+      // Never surface an authenticated upstream response body. A provider or
+      // intermediary must not be able to reflect a bearer credential into UI,
+      // browser traces, or host logs through an error message.
+      const message = apiKey === undefined ? errorMessage(body, 'AllModels request failed') : 'AllModels rejected the authenticated request'
+      throw new AllModelsError(response.status, `HTTP_${String(response.status)}`, message)
     }
     return body
   } catch (error) {

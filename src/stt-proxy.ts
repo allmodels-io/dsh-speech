@@ -68,7 +68,7 @@ export function upstreamUrl(settings: SpeechSettings, binding: { provider: strin
   return base
 }
 
-export function normalizedEvent(data: RawData): unknown {
+export function normalizedEvent(data: RawData, credential?: string): unknown {
   try {
     const text = typeof data === 'string' ? data : data.toString('utf8')
     const value: unknown = JSON.parse(text)
@@ -87,8 +87,13 @@ export function normalizedEvent(data: RawData): unknown {
       return { type: 'final', sequence, text: event.text, ...(languageCode === undefined ? {} : { languageCode }) }
     }
     if (eventType === 'stt.error') {
-      const code = typeof event.code === 'string' ? event.code : 'UPSTREAM_ERROR'
-      const message = typeof event.message === 'string' ? event.message : 'Speech recognition failed'
+      const code = typeof event.code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/u.test(event.code) ? event.code : 'UPSTREAM_ERROR'
+      const upstreamMessage = typeof event.message === 'string' && event.message.length <= 500
+        ? event.message
+        : 'Speech recognition failed'
+      const message = credential !== undefined && credential.length > 0 && upstreamMessage.includes(credential)
+        ? 'Speech recognition failed'
+        : upstreamMessage
       return { type: 'error', code, message }
     }
     if (eventType === 'stt.session.ended' || eventType === 'stt.ended') return { type: 'ended' }
@@ -218,7 +223,7 @@ export class SttProxy {
       send(client, { type: 'ready', model: binding.model, provider: binding.provider })
     })
     upstream.on('message', data => {
-      const event = normalizedEvent(data)
+      const event = normalizedEvent(data, credential.value)
       if (event !== undefined) send(client, event)
     })
     upstream.on('error', () => {

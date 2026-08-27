@@ -1,6 +1,6 @@
 {
   "name": "@allmodels/dsh-speech",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Streaming speech-to-text for DeepSeek Harness using AllModels.io.",
   "keywords": [
     "dsh-plugin",
@@ -61,6 +61,8 @@
     "clean": "rm -rf lib coverage",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "node scripts/run-e2e.mjs mock",
+    "test:e2e:live": "node scripts/run-e2e.mjs live",
     "typecheck": "tsc --noEmit",
     "check:sessions": "node scripts/check-no-session-access.mjs",
     "check": "pnpm check:sessions && pnpm typecheck && pnpm test && pnpm build",
@@ -95,6 +97,7 @@
     "@deepseek-ai/dsh-settings": "0.1.1-rc.2",
     "@deepseek-ai/schemastery": "3.18.1",
     "@testing-library/react": "^16.3.0",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.18.0",
     "@types/react": "^18.3.24",
     "@types/react-dom": "^18.3.7",
