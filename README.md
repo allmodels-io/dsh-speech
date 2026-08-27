@@ -77,7 +77,7 @@ Model and streaming details come from the [AllModels provider catalog](https://d
 
 ## Spoken summaries
 
-For each newly completed answer, the plugin uses the exact LLM provider/model recorded on that answer to produce plain, speakable prose of at most 90 words. It then creates a complete MP3 through a compatible synchronous AllModels TTS route. Answers already present when a session is first opened are not generated automatically, but their **Play summary** control prepares audio on demand.
+For each newly completed answer, the plugin uses the exact LLM provider/model recorded on that answer to produce concise, plain, speakable prose without an arbitrary word limit. It begins streaming MP3 audio through a compatible AllModels TTS route as soon as validated audio chunks arrive. Answers already present when a session is first opened are not generated automatically, but their **Play summary** control prepares audio on demand.
 
 Autoplay is enabled by default and can be changed either in **Settings → Speech → Spoken summaries** or from the chat-header toggle. This is one global plugin preference shared by every chat. Changing it affects future answers only.
 

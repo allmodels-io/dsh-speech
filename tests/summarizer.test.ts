@@ -26,7 +26,7 @@ const responseChunks: StreamChunk[] = [
 ]
 
 describe('spoken-summary LLM call', () => {
-  it('uses the exact recorded route, tool-free prompt, and 256-token cap', async () => {
+  it('uses the exact recorded route and a tool-free prompt without an artificial output cap', async () => {
     const resolve = vi.fn(async value => value)
     const target = llmWith(responseChunks, resolve)
     const summary = await summarizeAnswer(target.llm, {
@@ -35,7 +35,8 @@ describe('spoken-summary LLM call', () => {
     })
     expect(summary).toBe('The change is complete. Restart the app.')
     expect(resolve).toHaveBeenCalledWith(expect.objectContaining({ provider: 'openai', model: 'gpt-5', reasoningEffort: 'high' }), undefined)
-    expect(target.captured()).toMatchObject({ provider: 'openai', model: 'gpt-5', maxTokens: 256, system: SUMMARY_SYSTEM_PROMPT })
+    expect(target.captured()).toMatchObject({ provider: 'openai', model: 'gpt-5', system: SUMMARY_SYSTEM_PROMPT })
+    expect(target.captured()?.maxTokens).toBeUndefined()
     expect(target.captured()?.tools).toBeUndefined()
     const block = target.captured()?.messages[0]?.content[0]
     const payload = JSON.parse(block?.type === 'text' ? block.text : '')
@@ -80,19 +81,33 @@ describe('spoken-summary LLM call', () => {
     })).rejects.toThrow('recorded LLM route')
   })
 
-  it('enforces the 90-word speakable-text ceiling even when a model ignores the prompt', async () => {
+  it('does not impose an arbitrary word ceiling on a valid speakable summary', async () => {
     const long = Array.from({ length: 120 }, (_, index) => `word${String(index)}`).join(' ')
     const chunks: StreamChunk[] = [
       { type: 'block-start', index: 0, blockType: 'text' },
-      { type: 'text-delta', index: 0, text: `${long} https://secret.example \`code\`` },
+      { type: 'text-delta', index: 0, text: `${long} https://secret.example` },
       { type: 'finish', reason: { kind: 'stop' } },
     ]
     const result = await summarizeAnswer(llmWith(chunks).llm, {
       request: 'Do it', answer: 'Done', locale: 'en', route: { provider: 'p', model: 'm' },
     })
-    expect(result.split(/\s+/u)).toHaveLength(90)
+    expect(result.split(/\s+/u)).toHaveLength(120)
     expect(result).not.toContain('http')
-    expect(result).not.toContain('`')
+  })
+
+  it('uses a complete sentence at the provider character boundary', async () => {
+    const complete = `${Array.from({ length: 350 }, (_, index) => `complete${String(index)}`).join(' ')}.`
+    const unfinished = Array.from({ length: 400 }, (_, index) => `unfinished${String(index)}`).join(' ')
+    const chunks: StreamChunk[] = [
+      { type: 'block-start', index: 0, blockType: 'text' },
+      { type: 'text-delta', index: 0, text: `${complete} ${unfinished}` },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ]
+    const result = await summarizeAnswer(llmWith(chunks).llm, {
+      request: 'Do it', answer: 'Done', locale: 'en', route: { provider: 'p', model: 'm' },
+    })
+    expect(result).toBe(complete)
+    expect(result.length).toBeLessThanOrEqual(4_096)
   })
 
   it('passes cancellation to route resolution and generation', async () => {

@@ -8,13 +8,14 @@ class FakeAudio {
   src = ''
   currentTime = 0
   duration = 5
+  ended = false
   paused = true
   preload = ''
   onended: ((event: Event) => void) | null = null
   onerror: ((event: Event) => void) | null = null
   onpause: ((event: Event) => void) | null = null
   ontimeupdate: ((event: Event) => void) | null = null
-  play = vi.fn(async () => { this.paused = false })
+  play = vi.fn(async () => { this.ended = false; this.paused = false })
   pause = vi.fn(() => {
     const changed = !this.paused
     this.paused = true
@@ -22,6 +23,7 @@ class FakeAudio {
   })
   removeAttribute = vi.fn(() => { this.src = '' })
   load = vi.fn()
+  captureStream?: (() => MediaStream) | undefined
 }
 
 const settings: SpokenPreparationSettings = {
@@ -43,6 +45,7 @@ async function settle(): Promise<void> {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -163,6 +166,68 @@ describe('browser-global spoken-summary arbitration', () => {
     expect(target.audio.currentTime).toBe(2)
     expect(target.audio.removeAttribute).toHaveBeenCalledTimes(sourceWrites)
     expect(target.audio.play).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets the terminal ended event win when the browser dispatches pause first', async () => {
+    vi.useFakeTimers()
+    const target = setup()
+    await target.controller.prepare(source('a'), settings, false)
+    await target.controller.play('a', true)
+    target.audio.currentTime = target.audio.duration
+    target.audio.ended = true
+    target.audio.onpause?.(new Event('pause'))
+    target.audio.onended?.(new Event('ended'))
+    await vi.runAllTimersAsync()
+    expect(target.controller.getSnapshot().messages.get('a')).toMatchObject({
+      phase: 'ready', ended: true, progress: target.audio.duration,
+    })
+  })
+
+  it('keeps the waveform moving on explicit play and replay when captured audio is flat', async () => {
+    const callbacks: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback)
+      return callbacks.length
+    }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const contexts: Array<{ close: ReturnType<typeof vi.fn> }> = []
+    class SilentAudioContext {
+      close = vi.fn(async () => {})
+      resume = vi.fn(async () => {})
+      constructor() { contexts.push(this) }
+      createAnalyser(): AnalyserNode {
+        return {
+          fftSize: 128,
+          smoothingTimeConstant: 0,
+          getByteTimeDomainData: (data: Uint8Array) => { data.fill(128) },
+        } as unknown as AnalyserNode
+      }
+      createMediaStreamSource(): MediaStreamAudioSourceNode {
+        return { connect: vi.fn() } as unknown as MediaStreamAudioSourceNode
+      }
+    }
+    vi.stubGlobal('AudioContext', SilentAudioContext)
+    const audio = new FakeAudio()
+    audio.captureStream = vi.fn(() => ({} as MediaStream))
+    const target = setup(audio)
+    await target.controller.prepare(source('a'), settings, false)
+
+    await target.controller.play('a', true)
+    callbacks.shift()?.(100)
+    const first = target.controller.getSnapshot().messages.get('a')?.peaks
+    callbacks.shift()?.(160)
+    const second = target.controller.getSnapshot().messages.get('a')?.peaks
+    expect(first).not.toEqual(second)
+
+    audio.onended?.(new Event('ended'))
+    callbacks.length = 0
+    await target.controller.play('a', true)
+    callbacks.shift()?.(240)
+    const replay = target.controller.getSnapshot().messages.get('a')?.peaks
+    callbacks.shift()?.(300)
+    expect(replay).not.toEqual(target.controller.getSnapshot().messages.get('a')?.peaks)
+    expect(contexts).toHaveLength(2)
+    expect(contexts[0]?.close).toHaveBeenCalledOnce()
   })
 
   it('falls back to ready when autoplay is blocked and releases resources on unmount/disposal', async () => {

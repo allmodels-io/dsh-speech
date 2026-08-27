@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AllModelsClient, AllModelsError, requestAudio, requestJson } from '../src/allmodels.ts'
+import { AllModelsClient, AllModelsError, requestAudio, requestJson, streamAudio } from '../src/allmodels.ts'
 import { DEFAULT_API_KEY_ENV, type SpeechSettings } from '../src/shared.ts'
 
 const settings: SpeechSettings = {
@@ -9,7 +9,10 @@ const settings: SpeechSettings = {
   defaultTopUpUsd: 10,
 }
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 describe('AllModels HTTP client', () => {
   it('keeps authentication in the Authorization header', async () => {
@@ -71,5 +74,22 @@ describe('AllModels HTTP client', () => {
     })))
     await expect(requestAudio(settings.baseURL, '/oai/audio/speech', {}, 'key', { timeoutMs: 1 }))
       .rejects.toMatchObject({ code: 'TIMEOUT', status: 504 })
+  })
+
+  it('treats the streaming timeout as inactivity rather than total speech length', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0x49, 0x44, 0x33]))
+        setTimeout(() => { controller.enqueue(new Uint8Array([0x04])) }, 5)
+        setTimeout(() => { controller.close() }, 10)
+      },
+    }), { status: 200, headers: { 'content-type': 'audio/mpeg' } })))
+    const chunks: Uint8Array[] = []
+    const streaming = streamAudio(settings.baseURL, '/oai/audio/speech', {}, 'key', chunk => { chunks.push(chunk) }, { timeoutMs: 8 })
+    await vi.advanceTimersByTimeAsync(6)
+    await vi.advanceTimersByTimeAsync(6)
+    await expect(streaming).resolves.toBeUndefined()
+    expect(chunks.reduce((size, chunk) => size + chunk.byteLength, 0)).toBe(4)
   })
 })

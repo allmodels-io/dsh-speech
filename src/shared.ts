@@ -35,10 +35,11 @@ export interface SpeechSettings {
   ttsProvider?: string
   ttsVoice?: string
   autoPlay?: boolean
+  autoplayInlineRevealed?: boolean
 }
 
 export type SpeechUserSettings = Pick<SpeechSettings,
-  'model' | 'provider' | 'language' | 'context' | 'ttsModel' | 'ttsProvider' | 'ttsVoice' | 'autoPlay'>
+  'model' | 'provider' | 'language' | 'context' | 'ttsModel' | 'ttsProvider' | 'ttsVoice' | 'autoPlay' | 'autoplayInlineRevealed'>
 
 export interface CatalogBinding {
   provider: string

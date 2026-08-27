@@ -149,7 +149,13 @@ export async function streamAudio(
   options: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal; start?: () => void } = {},
 ): Promise<void> {
   const controller = new AbortController()
-  const timeout = setTimeout(() => { controller.abort() }, options.timeoutMs ?? TTS_TIMEOUT_MS)
+  const idleTimeoutMs = options.timeoutMs ?? TTS_TIMEOUT_MS
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const refreshTimeout = (): void => {
+    clearTimeout(timeout)
+    timeout = setTimeout(() => { controller.abort() }, idleTimeoutMs)
+  }
+  refreshTimeout()
   const onAbort = (): void => { controller.abort() }
   options.signal?.addEventListener('abort', onAbort, { once: true })
   try {
@@ -167,6 +173,7 @@ export async function streamAudio(
       const errorBody: unknown = await response.json().catch(() => undefined)
       throw new AllModelsError(response.status, `HTTP_${String(response.status)}`, errorMessage(errorBody, 'AllModels speech request failed'))
     }
+    refreshTimeout()
     const maxBytes = options.maxBytes ?? MAX_TTS_RESPONSE_BYTES
     const declared = Number(response.headers.get('content-length'))
     if (Number.isFinite(declared) && declared > maxBytes) throw new AllModelsError(502, 'RESPONSE_TOO_LARGE', 'AllModels speech response exceeded 16 MB')
@@ -178,6 +185,7 @@ export async function streamAudio(
     while (true) {
       const part = await reader.read()
       if (part.done) break
+      refreshTimeout()
       size += part.value.byteLength
       if (size > maxBytes) {
         await reader.cancel()

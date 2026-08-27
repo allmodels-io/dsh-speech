@@ -40,6 +40,7 @@ export const Config: z<Config> = z.object({
   ttsProvider: z.string(),
   ttsVoice: z.string(),
   autoPlay: z.boolean().default(true),
+  autoplayInlineRevealed: z.boolean().default(false),
 })
 
 export const UserSettingsConfig: z<SpeechUserSettings> = z.object({
@@ -51,12 +52,23 @@ export const UserSettingsConfig: z<SpeechUserSettings> = z.object({
   ttsProvider: z.string(),
   ttsVoice: z.string(),
   autoPlay: z.boolean().default(true),
+  autoplayInlineRevealed: z.boolean().default(false),
 })
 
 const MAX_BODY = 16 * 1024
 const MAX_SUMMARIZE_BODY = 384 * 1024
 const TTS_LEASE_MS = 10 * 60 * 1_000
 const MAX_TTS_LEASES = 128
+
+interface TtsLease {
+  chunks: Uint8Array[]
+  size: number
+  complete: boolean
+  error?: unknown
+  expiresAt: number
+  abort: AbortController
+  listeners: Set<() => void>
+}
 
 async function readJson(req: IncomingMessage, maximum = MAX_BODY): Promise<Record<string, unknown>> {
   let size = 0
@@ -146,6 +158,7 @@ export function apply(ctx: Context, config: Config): void {
     ...(config.ttsProvider === undefined ? {} : { ttsProvider: config.ttsProvider }),
     ...(config.ttsVoice === undefined ? {} : { ttsVoice: config.ttsVoice }),
     autoPlay: config.autoPlay ?? true,
+    autoplayInlineRevealed: config.autoplayInlineRevealed ?? false,
   }
   let userSettingsSource = (): SpeechUserSettings => entrySettings
   const settingsSource = (): SpeechSettings => ({ ...config, ...userSettingsSource() })
@@ -157,7 +170,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const allModels = new AllModelsClient()
   const pendingSpeech = new Set<AbortController>()
-  const ttsLeases = new Map<string, { request: { text: string; model: string; provider: string; voice: string }; expiresAt: number }>()
+  const ttsLeases = new Map<string, TtsLease>()
   const keyFor = () => credentialRef(settingsSource().apiKeyEnv)
   const resolveCredential = () => ctx.credentials.resolve(keyFor())
   const withRequestAbort = async <T>(req: IncomingMessage, operation: (signal: AbortSignal) => Promise<T>, res?: ServerResponse): Promise<T> => {
@@ -222,23 +235,91 @@ export function apply(ctx: Context, config: Config): void {
     return { text, model, provider, voice }
   }
 
-  const streamSpeech = async (req: IncomingMessage, res: ServerResponse, request: { text: string; model: string; provider: string; voice: string }): Promise<void> => {
-    const credential = await resolveCredential()
-    if (credential === undefined) throw new Error('Connect AllModels first')
-    await withRequestAbort(req, signal => allModels.streamSpeech(settingsSource(), credential.value, request, async chunk => {
-      if (!res.write(chunk)) await once(res, 'drain')
-    }, {
-      signal,
-      start: () => {
-        res.writeHead(200, {
-          'content-type': 'audio/mpeg',
-          'cache-control': 'no-store',
-          'x-content-type-options': 'nosniff',
-          'accept-ranges': 'none',
-        })
-      },
-    }), res)
-    res.end()
+  const wakeLease = (lease: TtsLease): void => {
+    for (const listener of lease.listeners) listener()
+    lease.listeners.clear()
+  }
+
+  const removeLease = (token: string): void => {
+    const lease = ttsLeases.get(token)
+    if (lease === undefined) return
+    lease.abort.abort()
+    wakeLease(lease)
+    ttsLeases.delete(token)
+  }
+
+  const startLease = (
+    lease: TtsLease,
+    request: { text: string; model: string; provider: string; voice: string },
+    credential: string,
+  ): void => {
+    pendingSpeech.add(lease.abort)
+    void allModels.streamSpeech(settingsSource(), credential, request, chunk => {
+      lease.chunks.push(chunk.slice())
+      lease.size += chunk.byteLength
+      wakeLease(lease)
+    }, { signal: lease.abort.signal }).then(() => {
+      lease.complete = true
+      wakeLease(lease)
+    }).catch(error => {
+      lease.error = error
+      wakeLease(lease)
+    }).finally(() => {
+      pendingSpeech.delete(lease.abort)
+    })
+  }
+
+  const serveLease = async (req: IncomingMessage, res: ServerResponse, lease: TtsLease): Promise<void> => {
+    let cursor = 0
+    let closed = false
+    let headersSent = false
+    const closedEarly = (): void => {
+      closed = true
+      wakeLease(lease)
+    }
+    req.once('aborted', closedEarly)
+    res.once('close', closedEarly)
+    const waitForChange = (): Promise<void> => new Promise(resolve => {
+      if (closed || cursor < lease.chunks.length || lease.complete || lease.error !== undefined) {
+        resolve()
+        return
+      }
+      lease.listeners.add(resolve)
+    })
+    try {
+      while (!closed) {
+        if (lease.error !== undefined && cursor === 0) throw lease.error
+        if (!headersSent && (cursor < lease.chunks.length || lease.complete)) {
+          res.writeHead(200, {
+            'content-type': 'audio/mpeg',
+            ...(lease.complete ? { 'content-length': String(lease.size) } : {}),
+            'cache-control': 'no-store',
+            'x-content-type-options': 'nosniff',
+            'accept-ranges': 'none',
+            'x-accel-buffering': 'no',
+          })
+          headersSent = true
+        }
+        while (!closed && cursor < lease.chunks.length) {
+          const writable = res.write(lease.chunks[cursor++]!)
+          if (!writable) await Promise.race([once(res, 'drain'), once(res, 'close')])
+        }
+        if (closed) return
+        if (lease.error !== undefined) {
+          if (!headersSent) throw lease.error
+          res.destroy()
+          return
+        }
+        if (lease.complete) {
+          res.end()
+          return
+        }
+        await waitForChange()
+      }
+    } finally {
+      req.off('aborted', closedEarly)
+      res.off('close', closedEarly)
+    }
   }
 
   register('GET', '/api/dsh-speech/status', async () => {
@@ -306,11 +387,21 @@ export function apply(ctx: Context, config: Config): void {
 
   register('POST', '/api/dsh-speech/tts/prepare', async req => {
     const now = Date.now()
-    for (const [token, lease] of ttsLeases) if (lease.expiresAt <= now) ttsLeases.delete(token)
-    while (ttsLeases.size >= MAX_TTS_LEASES) ttsLeases.delete(ttsLeases.keys().next().value as string)
+    for (const [token, lease] of ttsLeases) if (lease.expiresAt <= now) removeLease(token)
+    while (ttsLeases.size >= MAX_TTS_LEASES) removeLease(ttsLeases.keys().next().value as string)
+    const request = validateTtsBody(await readJson(req))
+    const credential = await resolveCredential()
+    if (credential === undefined) throw new Error('Connect AllModels first')
     const token = randomBytes(24).toString('base64url')
-    const expiresAt = now + TTS_LEASE_MS
-    ttsLeases.set(token, { request: validateTtsBody(await readJson(req)), expiresAt })
+    const expiresAt = Date.now() + TTS_LEASE_MS
+    const lease: TtsLease = {
+      chunks: [], size: 0, complete: false, expiresAt,
+      abort: new AbortController(), listeners: new Set(),
+    }
+    ttsLeases.set(token, lease)
+    // The lease owns upstream generation. A media element may disconnect and
+    // reconnect without cancelling or restarting the AllModels speech stream.
+    startLease(lease, request, credential.value)
     return { url: `/api/dsh-speech/tts/audio/${token}`, expiresAt }
   })
 
@@ -325,12 +416,12 @@ export function apply(ctx: Context, config: Config): void {
       const token = new URL(req.url ?? '/', 'http://localhost').pathname.slice('/api/dsh-speech/tts/audio/'.length)
       const lease = /^[A-Za-z0-9_-]{32}$/u.test(token) ? ttsLeases.get(token) : undefined
       if (lease === undefined || lease.expiresAt <= Date.now()) {
-        if (lease !== undefined) ttsLeases.delete(token)
+        if (lease !== undefined) removeLease(token)
         sendJson(res, 404, { error: { code: 'AUDIO_EXPIRED', message: 'This spoken audio has expired. Retry to regenerate it.' } })
         return
       }
       try {
-        await streamSpeech(req, res, lease.request)
+        await serveLease(req, res, lease)
       } catch (error) {
         const safe = safeError(error)
         if (!res.headersSent) sendJson(res, safe.status, safe.body)
@@ -394,6 +485,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => {
     for (const request of pendingSpeech) request.abort()
     pendingSpeech.clear()
+    for (const lease of ttsLeases.values()) wakeLease(lease)
     ttsLeases.clear()
   }, `${PLUGIN_NAME}: abort speech requests`)
 }

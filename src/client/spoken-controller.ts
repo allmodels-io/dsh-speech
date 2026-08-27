@@ -55,6 +55,7 @@ interface AudioLike {
   src: string
   currentTime: number
   duration: number
+  ended: boolean
   paused: boolean
   preload: string
   onended: ((event: Event) => void) | null
@@ -179,6 +180,7 @@ export class SpokenSummaryController {
   private analyserData: Uint8Array<ArrayBuffer> | undefined
   private analysisFrame: number | undefined
   private analysisTick = 0
+  private pauseResolutionTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(audioFactory: () => AudioLike = browserAudio) {
     this.audio = audioFactory()
@@ -317,6 +319,7 @@ export class SpokenSummaryController {
     if (this.activeMessageId !== undefined && this.activeMessageId !== messageId) this.stopActive()
     const generation = ++this.playbackGeneration
     this.activeMessageId = messageId
+    this.clearPauseResolution()
     if (this.loadedMessageId !== messageId) {
       this.audio.pause()
       this.audio.src = state.audioUrl
@@ -325,13 +328,25 @@ export class SpokenSummaryController {
     } else if (state.ended === true) {
       this.audio.currentTime = 0
     }
-    this.audio.onended = () => { this.finishPlayback(generation, messageId, true) }
+    this.audio.onended = () => {
+      this.clearPauseResolution()
+      this.finishPlayback(generation, messageId, true)
+    }
     this.audio.onerror = () => {
       if (!this.owns(generation, messageId)) return
       this.fail(messageId, 'The spoken summary could not be played.')
       this.clearAudioOwnership(true)
     }
-    this.audio.onpause = () => { this.finishPlayback(generation, messageId, false) }
+    this.audio.onpause = () => {
+      if (!this.owns(generation, messageId)) return
+      this.clearPauseResolution()
+      // Browsers can dispatch a terminal `pause` immediately before `ended`.
+      // Give `ended` the opportunity to win before treating this as resumable.
+      this.pauseResolutionTimer = setTimeout(() => {
+        this.pauseResolutionTimer = undefined
+        this.finishPlayback(generation, messageId, this.audio.ended)
+      }, 80)
+    }
     this.audio.ontimeupdate = () => {
       if (!this.owns(generation, messageId)) return
       const duration = Number.isFinite(this.audio.duration) ? this.audio.duration : state.duration
@@ -411,6 +426,7 @@ export class SpokenSummaryController {
 
   private startAnalysis(messageId: string, generation: number): void {
     this.stopAnalysis()
+    this.resetAnalyser()
     this.ensureAnalyser()
     if (typeof requestAnimationFrame === 'undefined') return
     const frame = (time: number): void => {
@@ -453,16 +469,25 @@ export class SpokenSummaryController {
   private readAmplitude(time: number): readonly number[] {
     if (this.analyser !== undefined && this.analyserData !== undefined) {
       this.analyser.getByteTimeDomainData(this.analyserData)
-      return Array.from({ length: 48 }, (_, index) => {
+      let signalPeak = 0
+      const peaks = Array.from({ length: 48 }, (_, index) => {
         const start = Math.floor(index * this.analyserData!.length / 48)
         const end = Math.max(start + 1, Math.floor((index + 1) * this.analyserData!.length / 48))
         let amplitude = 0
         for (let sample = start; sample < end; sample += 1) {
           amplitude = Math.max(amplitude, Math.abs((this.analyserData![sample] ?? 128) - 128) / 128)
         }
+        signalPeak = Math.max(signalPeak, amplitude)
         return Math.min(1, 0.06 + Math.sqrt(amplitude) * 2.4)
       })
+      // captureStream() can expose an ended or temporarily silent track after a
+      // manual start or replay. A flat analyzer should not freeze the playback UI.
+      if (signalPeak > 0.004) return peaks
     }
+    return this.activityPeaks(time)
+  }
+
+  private activityPeaks(time: number): readonly number[] {
     return Array.from({ length: 48 }, (_, index) => {
       const carrier = 0.5 + 0.5 * Math.sin(time * 0.014 + index * 1.37)
       const envelope = 0.5 + 0.5 * Math.sin(time * 0.0037 + index * 0.29)
@@ -474,6 +499,19 @@ export class SpokenSummaryController {
     if (this.analysisFrame !== undefined && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(this.analysisFrame)
     this.analysisFrame = undefined
     this.analysisTick = 0
+  }
+
+  private clearPauseResolution(): void {
+    if (this.pauseResolutionTimer !== undefined) clearTimeout(this.pauseResolutionTimer)
+    this.pauseResolutionTimer = undefined
+  }
+
+  private resetAnalyser(): void {
+    void this.analyserContext?.close().catch(() => {})
+    this.analyserContext = undefined
+    this.analyserSource = undefined
+    this.analyser = undefined
+    this.analyserData = undefined
   }
 
   private ensure(messageId: string): MutableMessage {
@@ -532,6 +570,7 @@ export class SpokenSummaryController {
 
   private clearAudioOwnership(unload: boolean): void {
     this.stopAnalysis()
+    this.clearPauseResolution()
     this.activeMessageId = undefined
     this.audio.onended = null
     this.audio.onerror = null

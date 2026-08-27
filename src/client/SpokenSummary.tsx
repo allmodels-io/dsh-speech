@@ -82,8 +82,18 @@ export function SpokenSummaryTail({ controller, spoken, scope, getLocale, seq, u
   )
   const state = spokenState.messages.get(id) ?? { phase: 'idle' as const, duration: 0, progress: 0, peaks: [] }
   const latestAudioMessageId = [...sources].reverse().find(candidate => spokenState.messages.get(candidate.messageId)?.audioUrl !== undefined)?.messageId
+  const latestSourceMessageId = sources.at(-1)?.messageId
+  // Before this reveal flag existed, an explicitly saved autoplay value was
+  // the only durable evidence that the inline control had already been used.
+  const legacyAutoplayWasUsed = (scopeState.user as Partial<SpeechUserSettings>).autoPlay !== undefined
+  const autoplayInlineRevealed = scopeState.value?.autoplayInlineRevealed === true || legacyAutoplayWasUsed
+  const autoplayHostMessageId = latestAudioMessageId ?? (autoplayInlineRevealed ? latestSourceMessageId : undefined)
 
   useEffect(() => spoken.mount(id), [spoken, id])
+  useEffect(() => {
+    if (autoplayHostMessageId !== id || scopeState.value?.autoplayInlineRevealed === true || !scopeState.writable) return
+    void scope.set('autoplayInlineRevealed', true)
+  }, [autoplayHostMessageId, id, scope, scopeState.value?.autoplayInlineRevealed, scopeState.writable])
   if (source === undefined) return null
   const preparing = state.phase === 'preparing'
   const unavailable = source.route === undefined || (client.catalog !== undefined && settings.bindings.length === 0)
@@ -136,7 +146,7 @@ export function SpokenSummaryTail({ controller, spoken, scope, getLocale, seq, u
         />
       </div>
       {showLabel ? <span className={styles.summaryLabel}>{label}</span> : null}
-      {state.audioUrl === undefined || latestAudioMessageId !== id ? null : (
+      {autoplayHostMessageId !== id ? null : (
         <button
           type="button"
           className={styles.autoplayToggle}
