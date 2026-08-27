@@ -15,17 +15,18 @@ function t(key: SpeechLocaleKey, params?: Record<string, unknown>): string {
   return value
 }
 
-type SnapshotInput = Omit<SpeechClientState, 'microphones' | 'switchingMicrophone'>
-  & Partial<Pick<SpeechClientState, 'microphones' | 'switchingMicrophone'>>
+type SnapshotInput = Omit<SpeechClientState, 'microphones' | 'switchingMicrophone' | 'hasTranscript'>
+  & Partial<Pick<SpeechClientState, 'microphones' | 'switchingMicrophone' | 'hasTranscript'>>
 
 function withMicrophones(snapshot: SnapshotInput): SpeechClientState {
-  return { microphones: [], switchingMicrophone: false, ...snapshot }
+  return { microphones: [], switchingMicrophone: false, hasTranscript: false, ...snapshot }
 }
 
 function renderMic(inputSnapshot: SnapshotInput) {
   const snapshot = withMicrophones(inputSnapshot)
   const toggle = vi.fn(async () => {})
   const cancel = vi.fn()
+  const stopAndSend = vi.fn(async () => {})
   const reportError = vi.fn()
   const controller = {
     getSnapshot: () => snapshot,
@@ -34,6 +35,7 @@ function renderMic(inputSnapshot: SnapshotInput) {
     release: vi.fn(),
     toggle,
     cancel,
+    stopAndSend,
     reportError,
   } as unknown as SpeechController
   const inputActions = { setDraft: vi.fn(), addImages: vi.fn(), removeImage: vi.fn(), pruneImages: vi.fn(), submit: vi.fn() }
@@ -46,7 +48,7 @@ function renderMic(inputSnapshot: SnapshotInput) {
     t,
     useSession: vi.fn(), useProjection: vi.fn(), useSessions: vi.fn(), useWorkspaces: vi.fn(),
   }
-  return { ...render(createElement(SpeechMic, props as never)), toggle, cancel, reportError, inputActions }
+  return { ...render(createElement(SpeechMic, props as never)), toggle, cancel, stopAndSend, reportError, inputActions }
 }
 
 function renderDock(inputSnapshot: SnapshotInput, showMetrics = true) {
@@ -151,6 +153,28 @@ describe('composer microphone', () => {
     expect(cancel).toBeTruthy()
     expect(takeover?.firstElementChild).toBe(cancel)
     expect(view.getByRole('button', { name: en.micStop })).toBeTruthy()
+    const send = view.getByRole('button', { name: en.micSend }) as HTMLButtonElement
+    expect(send.disabled).toBe(true)
+  })
+
+  it('keeps Stop left of Send and enables finish-and-send after speech arrives', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    const view = renderMic({
+      phase: 'recording',
+      activeSessionId: 'session-1' as never,
+      amplitude: 0.5,
+      metadataLoading: false,
+      hasTranscript: true,
+    })
+
+    const stop = view.getByRole('button', { name: en.micStop })
+    const send = view.getByRole('button', { name: en.micSend }) as HTMLButtonElement
+    expect(stop.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(send.disabled).toBe(false)
+    fireEvent.click(send)
+    expect(view.stopAndSend).toHaveBeenCalledOnce()
+    expect(view.toggle).not.toHaveBeenCalled()
+    expect(view.inputActions.submit).not.toHaveBeenCalled()
   })
 
   it('cancels an active recording without invoking Stop', () => {

@@ -16,6 +16,17 @@ test.beforeEach(async ({ page }) => {
 test('virtual microphone streams, commits, unlocks, and never auto-sends', async ({ page }) => {
   const input = composerInput(page)
   await input.fill('Existing draft')
+  const nativeSendStyle = await page.getByRole('button', { name: 'Send message' }).evaluate(element => {
+    const style = getComputedStyle(element)
+    const box = element.getBoundingClientRect()
+    return {
+      background: style.backgroundColor,
+      borderRadius: style.borderRadius,
+      color: style.color,
+      height: box.height,
+      width: box.width,
+    }
+  })
   await microphoneButton(page).click()
 
   await expect(page.locator('.dsh-speech-recording-progress')).toHaveText('Preparing microphone…')
@@ -27,13 +38,17 @@ test('virtual microphone streams, commits, unlocks, and never auto-sends', async
   const takeover = page.locator('.dsh-speech-recording-takeover')
   const cancel = page.getByRole('button', { name: 'Cancel voice input' })
   const stop = page.getByRole('button', { name: 'Stop voice input' })
-  const [takeoverBox, cancelBox, stopBox] = await Promise.all([
-    takeover.boundingBox(), cancel.boundingBox(), stop.boundingBox(),
+  const send = page.getByRole('button', { name: 'Finish voice input and send' })
+  const [takeoverBox, cancelBox, stopBox, sendBox] = await Promise.all([
+    takeover.boundingBox(), cancel.boundingBox(), stop.boundingBox(), send.boundingBox(),
   ])
   expect(takeoverBox).not.toBeNull()
   expect(cancelBox).not.toBeNull()
   expect(stopBox).not.toBeNull()
+  expect(sendBox).not.toBeNull()
   expect(cancelBox!.x).toBeLessThan(stopBox!.x)
+  expect(stopBox!.x).toBeLessThan(sendBox!.x)
+  expect(sendBox!.x + sendBox!.width).toBeGreaterThan(takeoverBox!.x + takeoverBox!.width - 50)
   expect(takeoverBox!.width).toBeGreaterThan(600)
   expect(takeoverBox!.x + takeoverBox!.width).toBeLessThanOrEqual(1280)
 
@@ -69,12 +84,42 @@ test('virtual microphone streams, commits, unlocks, and never auto-sends', async
   await page.keyboard.press('Escape')
 
   await waitForPartial(page, 'Existing draft hello world')
+  await expect(send).toBeEnabled()
+  const recordingSendStyle = await send.evaluate(element => {
+    const style = getComputedStyle(element)
+    const box = element.getBoundingClientRect()
+    return {
+      background: style.backgroundColor,
+      borderRadius: style.borderRadius,
+      color: style.color,
+      height: box.height,
+      width: box.width,
+    }
+  })
+  expect(recordingSendStyle).toEqual(nativeSendStyle)
   await stop.click()
   await expect(page.locator('.dsh-speech-recording-progress')).toHaveText('Finishing transcription…')
   await expect(microphoneButton(page)).toHaveAccessibleName('Start voice input', { timeout: 10_000 })
   await expect(input).toBeEditable()
   await expect(input).toHaveValue('Existing draft hello world')
   await expect(page.locator('[data-slot="conversation.session"]')).toBeEmpty()
+})
+
+test('recording Send finalizes the transcript and submits it once', async ({ page }) => {
+  const input = composerInput(page)
+  await input.fill('Voice draft')
+  await microphoneButton(page).click()
+  await waitForPartial(page, 'Voice draft hello world')
+
+  const send = page.getByRole('button', { name: 'Finish voice input and send' })
+  await expect(send).toBeEnabled()
+  await send.click()
+
+  await expect(page.locator('.dsh-speech-recording-progress')).toHaveText('Finishing transcription…')
+  await expect(microphoneButton(page)).toHaveAccessibleName('Start voice input', { timeout: 10_000 })
+  const session = page.locator('[data-slot="conversation.session"]')
+  await expect(session.getByText('Voice draft hello world', { exact: true })).toHaveCount(1)
+  await expect(input).toHaveValue('')
 })
 
 test('Cancel discards every active transcription change and restores the original draft', async ({ page }) => {

@@ -28,6 +28,7 @@ export interface SpeechClientState {
   activeMicrophoneId?: string | undefined
   switchingMicrophone: boolean
   microphoneError?: string | undefined
+  hasTranscript: boolean
 }
 
 interface ComposerBlocks {
@@ -37,7 +38,7 @@ interface ComposerBlocks {
 interface StartOptions {
   sessionId: SessionId
   draft: string
-  inputActions: { setDraft(text: string): void }
+  inputActions: { setDraft(text: string): void; submit(): void }
   locale: string
   listeningReason: string
 }
@@ -50,6 +51,7 @@ interface ActiveRecording extends StartOptions {
   stoppingCapture?: Promise<void>
   finalTimer?: ReturnType<typeof setTimeout>
   deviceChangeHandler?: (() => void) | undefined
+  sendAfterFinish?: boolean
 }
 
 function socketUrl(): string {
@@ -61,6 +63,7 @@ function socketUrl(): string {
 export class SpeechController {
   private snapshot: SpeechClientState = {
     phase: 'idle', amplitude: 0, metadataLoading: false, microphones: [], switchingMicrophone: false,
+    hasTranscript: false,
   }
   private readonly listeners = new Set<() => void>()
   private blocks: ComposerBlocks | undefined
@@ -136,6 +139,13 @@ export class SpeechController {
     await stoppingCapture
   }
 
+  async stopAndSend(): Promise<void> {
+    const active = this.active
+    if (active === undefined || active.finished || !this.snapshot.hasTranscript) return
+    active.sendAfterFinish = true
+    await this.stop()
+  }
+
   cancel(): void {
     const active = this.active
     if (active === undefined || active.finished) return
@@ -194,7 +204,7 @@ export class SpeechController {
     this.publish({
       phase: 'starting', activeSessionId: options.sessionId, amplitude: 0, error: undefined,
       activeModel: undefined, activeProvider: undefined, microphones: [], activeMicrophoneId: undefined,
-      switchingMicrophone: false, microphoneError: undefined,
+      switchingMicrophone: false, microphoneError: undefined, hasTranscript: false,
     })
 
     try {
@@ -267,6 +277,9 @@ export class SpeechController {
             ...(typeof message.languageCode === 'string' ? { languageCode: message.languageCode } : {}),
           })
           active.inputActions.setDraft(transcriptText(active.transcript))
+          if (message.text.trim().length > 0 && !this.snapshot.hasTranscript) {
+            this.publish({ hasTranscript: true })
+          }
           if (message.type === 'final' && this.snapshot.phase === 'finalizing') {
             if (active.finalTimer !== undefined) clearTimeout(active.finalTimer)
             active.finalTimer = setTimeout(() => { this.finish(active) }, 120)
@@ -311,8 +324,10 @@ export class SpeechController {
       activeMicrophoneId: undefined,
       switchingMicrophone: false,
       microphoneError: undefined,
+      hasTranscript: false,
       ...(error === undefined ? { error: undefined } : { error }),
     })
+    if (error === undefined && active.sendAfterFinish === true) active.inputActions.submit()
     void this.ensureMetadata(true)
   }
 

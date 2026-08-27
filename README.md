@@ -33,7 +33,7 @@ Or create a portable tarball:
 
 ```sh
 pnpm pack
-dsh plugin --profile web add ./allmodels-dsh-speech-0.1.1.tgz
+dsh plugin --profile web add ./allmodels-dsh-speech-0.1.2.tgz
 ```
 
 Restart the profile after adding or removing the bundle.
@@ -54,9 +54,9 @@ See the [AllModels agentic setup documentation](https://docs.allmodels.io/agenti
 1. Click the microphone next to Send.
 2. Speak while the amplitude bar and partial transcription update.
 3. While recording, choose **System default** or another input from the microphone selector beside TTFT. On a new chat, the selector appears beside the mode selector in the hero controls row.
-4. Click Stop. The plugin waits briefly for the last final transcript, unlocks the composer, and leaves the text as an editable draft.
+4. Click Stop to finalize and leave the text as an editable draft, or click the Send arrow to finalize and send in one action. The Send arrow becomes available after speech text first appears.
 
-Voice input never sends the message automatically. Existing draft text is preserved and the transcript is appended. Composer editing and Send are disabled while the microphone is active.
+Existing draft text is preserved and the transcript is appended. Composer editing remains locked while the microphone is active. Stop never sends; the recording Send arrow submits exactly once after finalization.
 
 Only one microphone may be active at a time. Leaving the originating session immediately stops capture, closes the speech socket, clears the transient composer lock, and preserves the latest draft text.
 
@@ -96,7 +96,7 @@ The bundle row may be given composition-level defaults in a Harness patch:
 
 - Audio is resampled in the browser and relayed through the local plugin host only while recording. It is never written to disk or retained for retry.
 - API keys remain host-side in the Harness credential service and are inserted only into authenticated AllModels requests.
-- Transcripts exist only in the browser's existing unsent composer draft until the user sends them normally.
+- Transcripts remain in the browser's composer draft until the user uses the normal Send arrow or the recording Send arrow.
 - The preferred microphone device ID is kept only in plugin-namespaced browser-local storage. It is not written to Harness sessions.
 - The host plugin does not inject Harness session services, import session packages, read session files, or write session files. A build check fails if a session/filesystem persistence dependency is introduced.
 - The plugin's custom HTTP and WebSocket routes accept only same-origin loopback requests and enforce bounded request/frame sizes.
@@ -124,7 +124,7 @@ pnpm pack --dry-run
 
 `pnpm check` runs the no-session-access boundary, TypeScript, unit/protocol tests, and both production bundles. Tests cover catalog defaults, provider capabilities, targeted promotional balances, transcript sequencing/CJK spacing, route security, credential redaction behavior, and the AllModels streaming wire mapping.
 
-`pnpm test:e2e` builds and packs the plugin, installs that tarball into a disposable DeepSeek Harness `0.1.1-rc.2` web profile, launches a local AllModels HTTP/WebSocket mock, and runs the Chromium desktop and mobile suite with a generated virtual microphone. It covers first-run account UI, API-key connection, settings layout and persistence, balance/top-up, microphone placement, preparing/recording/finishing states, live partials and finals, waveform motion, composer locking, Stop, Cancel, microphone selection, dark-mode menus, mobile layout, and no automatic sending. The disposable profile and workspace are created below the operating system's temporary directory; the runner never opens or modifies the user's Harness profile or sessions.
+`pnpm test:e2e` builds and packs the plugin, installs that tarball into a disposable DeepSeek Harness `0.1.1-rc.2` web profile, launches a local AllModels HTTP/WebSocket mock, and runs the Chromium desktop and mobile suite with a generated virtual microphone. It covers first-run account UI, API-key connection, settings layout and persistence, balance/top-up, microphone placement, preparing/recording/finishing states, live partials and finals, waveform motion, composer locking, Stop-without-send, finish-and-send, Cancel, microphone selection, dark-mode menus, and mobile layout. The disposable profile and workspace are created below the operating system's temporary directory; the runner never opens or modifies the user's Harness profile or sessions.
 
 For the optional live smoke test, put the following in a local `.secrets` file (which is gitignored), or export the variables normally:
 

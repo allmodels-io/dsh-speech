@@ -14,11 +14,11 @@ function t(key: SpeechLocaleKey, params?: Record<string, unknown>): string {
   return value
 }
 
-type SnapshotInput = Omit<SpeechClientState, 'microphones' | 'switchingMicrophone'>
-  & Partial<Pick<SpeechClientState, 'microphones' | 'switchingMicrophone'>>
+type SnapshotInput = Omit<SpeechClientState, 'microphones' | 'switchingMicrophone' | 'hasTranscript'>
+  & Partial<Pick<SpeechClientState, 'microphones' | 'switchingMicrophone' | 'hasTranscript'>>
 
 function renderSettings(inputSnapshot: SnapshotInput) {
-  const snapshot: SpeechClientState = { microphones: [], switchingMicrophone: false, ...inputSnapshot }
+  const snapshot: SpeechClientState = { microphones: [], switchingMicrophone: false, hasTranscript: false, ...inputSnapshot }
   const controller = {
     getSnapshot: () => snapshot,
     subscribe: () => () => {},

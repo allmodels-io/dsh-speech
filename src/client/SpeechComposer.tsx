@@ -45,6 +45,14 @@ function CloseIcon(): ReactNode {
   )
 }
 
+function SendIcon(): ReactNode {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8.3125.980183c.35517.072917.66652.223997.9502.452147.22454.18064.46759.4256.71679.67481L14.707 6.83468l-1.414 1.41406L9 3.95577V15.0417H7V3.95577L2.70703 8.24874 1.29297 6.83468l4.72754-4.72754c.2492-.24921.49226-.49417.71679-.67481.23932-.19247.54715-.38831.9502-.452147.2098-.033177.4156-.025023.625 0Z" fill="currentColor" />
+    </svg>
+  )
+}
+
 const WAVEFORM_PITCH = 4
 const WAVEFORM_BASELINE = 0.025
 
@@ -120,14 +128,17 @@ function RecordingWaveform({ amplitude }: { amplitude: number }): ReactNode {
   return <canvas ref={canvasRef} className={styles.recordingCanvas} aria-hidden="true" />
 }
 
-function RecordingTakeover({ amplitude, cancelLabel, disabled, phase, label, onCancel, onStop, stopLabel }: {
+function RecordingTakeover({ amplitude, cancelLabel, disabled, phase, label, onCancel, onSend, onStop, sendDisabled, sendLabel, stopLabel }: {
   amplitude: number
   cancelLabel: string
   disabled: boolean
   phase: 'starting' | 'recording' | 'finalizing'
   label: string
   onCancel: () => void
+  onSend: () => void
   onStop: () => void
+  sendDisabled: boolean
+  sendLabel: string
   stopLabel: string
 }): ReactNode {
   const recording = phase === 'recording'
@@ -154,16 +165,28 @@ function RecordingTakeover({ amplitude, cancelLabel, disabled, phase, label, onC
         )}
       </div>
       {recording ? (
-        <button
-          type="button"
-          className={`${styles.mic} ${styles.recordingStop}`}
-          disabled={disabled}
-          aria-label={stopLabel}
-          title={stopLabel}
-          onClick={onStop}
-        >
-          <MicIcon stopped />
-        </button>
+        <div className={styles.recordingActions}>
+          <button
+            type="button"
+            className={`${styles.mic} ${styles.recordingStop}`}
+            disabled={disabled}
+            aria-label={stopLabel}
+            title={stopLabel}
+            onClick={onStop}
+          >
+            <MicIcon stopped />
+          </button>
+          <button
+            type="button"
+            className={styles.recordingSend}
+            disabled={sendDisabled}
+            aria-label={sendLabel}
+            title={sendLabel}
+            onClick={onSend}
+          >
+            <SendIcon />
+          </button>
+        </div>
       ) : null}
       <span className={styles.srOnly} role="status" aria-live="polite">{label}</span>
     </div>
@@ -224,7 +247,10 @@ export function SpeechMic({ controller, getLocale, sessionId, input, inputAction
         label={state.phase === 'starting' ? t('starting')
           : state.phase === 'finalizing' ? t('finalizing') : t('listening')}
         onCancel={() => { controller.cancel() }}
+        onSend={() => { void controller.stopAndSend().catch(error => { controller.reportError(error instanceof Error ? error.message : 'Unable to send voice input') }) }}
         onStop={toggle}
+        sendDisabled={disabled || !state.hasTranscript}
+        sendLabel={t('micSend')}
         stopLabel={title}
       />
     )

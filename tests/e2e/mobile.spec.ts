@@ -17,6 +17,9 @@ test('mobile recording fits the composer and omits the microphone selector', asy
   await expect(page.locator('.dsh-speech-device-dock')).toBeHidden()
   await expect(page.getByRole('button', { name: 'Cancel voice input' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Stop voice input' })).toBeVisible()
+  const send = page.getByRole('button', { name: 'Finish voice input and send' })
+  await expect(send).toBeVisible()
+  await expect(send).toBeEnabled()
 
   await page.getByRole('button', { name: 'Cancel voice input' }).click()
   await expect(input).toHaveValue('Mobile draft')
