@@ -10,6 +10,14 @@
     "allmodels"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/allmodels-io/dsh-speech.git"
+  },
+  "homepage": "https://github.com/allmodels-io/dsh-speech#readme",
+  "bugs": {
+    "url": "https://github.com/allmodels-io/dsh-speech/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
