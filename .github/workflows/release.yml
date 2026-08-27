@@ -1,19 +1,25 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
   publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -22,15 +28,29 @@ jobs:
           package-manager-cache: false
       - run: npm install --global 'npm@^11.5.1'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - name: Verify release tag
-        run: node -e "const { version } = require('./package.json'); if (process.env.GITHUB_REF_NAME !== 'v' + version) throw new Error('Expected tag v' + version)"
-      - name: Publish to npm
+      - name: Publish an unpublished package version
+        id: publish
+        shell: bash
         run: |
           package_name="$(node -p "require('./package.json').name")"
           package_version="$(node -p "require('./package.json').version")"
+          release_tag="v$package_version"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
           if npm view "$package_name@$package_version" version --json >/dev/null 2>&1; then
             echo "$package_name@$package_version is already published; skipping."
+            echo 'published=false' >> "$GITHUB_OUTPUT"
           else
-            npm publish
+            npm publish --access public --provenance
+            echo 'published=true' >> "$GITHUB_OUTPUT"
           fi
+      - name: Tag the tested commit and create a GitHub release
+        if: steps.publish.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.publish.outputs.tag }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          git tag "$RELEASE_TAG" "$RELEASE_SHA"
+          git push origin "$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG"

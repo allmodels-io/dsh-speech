@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement } from 'react'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SpeechDock, SpeechInputDock, SpeechMic } from '../src/client/SpeechComposer.tsx'
 import type { SpeechController, SpeechClientState } from '../src/client/controller.ts'
@@ -221,6 +221,29 @@ describe('composer microphone', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('true')
     fireEvent.click(view.getByRole('menuitemradio', { name: 'USB Microphone' }))
     expect(view.switchMicrophone).toHaveBeenCalledWith('usb')
+  })
+
+  it('finds an existing-session metrics row when TTFT text renders after the dock', async () => {
+    const view = renderDock({
+      phase: 'recording',
+      activeSessionId: 'session-1' as never,
+      amplitude: 0.2,
+      metadataLoading: false,
+      activeMicrophoneId: 'built-in',
+      microphones: [{ deviceId: 'built-in', label: 'MacBook Microphone' }],
+    }, false)
+
+    const slot = view.container.querySelector('[data-slot="conversation.composer.dock"]')
+    const metrics = document.createElement('div')
+    const metricsText = document.createTextNode('Loading metrics')
+    metrics.append(metricsText)
+    slot?.append(metrics)
+    metricsText.data = '1 turns · 1 steps | LLM 1.6s | TTFT avg 0.9s'
+
+    await waitFor(() => {
+      expect(view.getByRole('button', { name: `${en.microphone}: MacBook Microphone` })).toBeTruthy()
+    })
+    expect(metrics.querySelector('.dsh-speech-device-separator')?.textContent).toBe('|')
   })
 
   it('shows the hero-sized microphone selector beside the mode control on a new chat', () => {

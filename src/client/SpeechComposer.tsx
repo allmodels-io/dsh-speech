@@ -355,17 +355,47 @@ function MicrophoneDockPortal({ controller, state, t }: {
   const [target, setTarget] = useState<HTMLElement | null>(null)
 
   useLayoutEffect(() => {
-    const marker = markerRef.current
-    const slot = marker?.closest('[data-slot="conversation.composer.dock"]')
-    if (!(slot instanceof HTMLElement)) return
-    const findTarget = (): void => {
-      const metrics = Array.from(slot.children).find(child => child !== marker && child.textContent?.includes('TTFT'))
-      setTarget(metrics instanceof HTMLElement ? metrics : null)
+    let disposed = false
+    let frame: number | undefined
+    let observedSlot: HTMLElement | null = null
+    const observer = new MutationObserver(() => { findTarget() })
+
+    const retry = (): void => {
+      if (disposed || frame !== undefined) return
+      frame = requestAnimationFrame(() => {
+        frame = undefined
+        findTarget()
+      })
     }
+
+    const findTarget = (): void => {
+      if (disposed) return
+      const marker = markerRef.current
+      const slot = marker?.closest('[data-slot="conversation.composer.dock"]')
+      if (!(slot instanceof HTMLElement)) {
+        setTarget(null)
+        retry()
+        return
+      }
+
+      if (observedSlot !== slot) {
+        observer.disconnect()
+        observedSlot = slot
+        observer.observe(slot, { childList: true, subtree: true, characterData: true })
+      }
+
+      const metrics = Array.from(slot.children).find(child => child !== marker && child.textContent?.includes('TTFT'))
+      const nextTarget = metrics instanceof HTMLElement ? metrics : null
+      setTarget(current => current === nextTarget ? current : nextTarget)
+      if (nextTarget === null) retry()
+    }
+
     findTarget()
-    const observer = new MutationObserver(findTarget)
-    observer.observe(slot, { childList: true })
-    return () => { observer.disconnect() }
+    return () => {
+      disposed = true
+      observer.disconnect()
+      if (frame !== undefined) cancelAnimationFrame(frame)
+    }
   }, [])
 
   return (
