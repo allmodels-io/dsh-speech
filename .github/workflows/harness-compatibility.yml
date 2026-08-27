@@ -1,0 +1,198 @@
+name: Harness Compatibility
+
+on:
+  schedule:
+    - cron: '27 3 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Specific @deepseek-ai/dsh version (blank uses the newest published version)
+        required: false
+        type: string
+      force:
+        description: Test even if this version is already tracked
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-compatibility
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      candidate: ${{ steps.version.outputs.candidate }}
+      current: ${{ steps.version.outputs.current }}
+      branch: ${{ steps.version.outputs.branch }}
+      should_test: ${{ steps.version.outputs.should_test }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.22.0
+          package-manager-cache: false
+      - name: Find an untested Harness release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          FORCE_TEST: ${{ inputs.force }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(node -p "require('./dsh-compatibility.json').testedVersion")"
+          candidate="$REQUESTED_VERSION"
+          if [[ -z "$candidate" ]]; then
+            candidate="$(npm view @deepseek-ai/dsh time --json | node -e '
+              let input = ""
+              process.stdin.on("data", chunk => { input += chunk })
+              process.stdin.on("end", () => {
+                const releases = Object.entries(JSON.parse(input))
+                  .filter(([name]) => name !== "created" && name !== "modified")
+                  .sort((left, right) => Date.parse(right[1]) - Date.parse(left[1]))
+                if (releases.length === 0) process.exit(1)
+                process.stdout.write(releases[0][0])
+              })
+            ')"
+          fi
+          resolved="$(npm view "@deepseek-ai/dsh@$candidate" version --json | node -e '
+            let input = ""
+            process.stdin.on("data", chunk => { input += chunk })
+            process.stdin.on("end", () => { process.stdout.write(JSON.parse(input)) })
+          ')"
+          if [[ "$resolved" != "$candidate" ]]; then
+            echo "Requested version resolved unexpectedly: $resolved" >&2
+            exit 1
+          fi
+          branch="automation/dsh-${candidate//[^0-9A-Za-z._-]/-}"
+          should_test=true
+          if [[ "$FORCE_TEST" != "true" && "$candidate" == "$current" ]]; then
+            should_test=false
+            echo "DeepSeek Harness $candidate is already the tested version."
+          fi
+          if [[ "$FORCE_TEST" != "true" && "$should_test" == "true" ]]; then
+            issue_count="$(gh issue list --state open --search "\"DeepSeek Harness $candidate compatibility tests failed\" in:title" --json number --jq length)"
+            pr_count="$(gh pr list --state open --head "$branch" --json number --jq length)"
+            if [[ "$issue_count" != "0" || "$pr_count" != "0" ]]; then
+              should_test=false
+              echo "DeepSeek Harness $candidate already has an open compatibility issue or pull request."
+            fi
+          fi
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "should_test=$should_test" >> "$GITHUB_OUTPUT"
+
+  compatibility-test:
+    needs: discover
+    if: needs.discover.outputs.should_test == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - name: Update the candidate dependency set
+        env:
+          DSH_VERSION: ${{ needs.discover.outputs.candidate }}
+        run: node scripts/update-dsh-version.mjs "$DSH_VERSION"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm check
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Test the packaged plugin in the candidate Harness
+        env:
+          DSH_SPEECH_DSH_VERSION: ${{ needs.discover.outputs.candidate }}
+        run: pnpm test:e2e
+
+  report-failure:
+    needs: [discover, compatibility-test]
+    if: always() && needs.discover.outputs.should_test == 'true' && needs.compatibility-test.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create one compatibility issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DSH_VERSION: ${{ needs.discover.outputs.candidate }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh label create dsh-compatibility --repo "$GITHUB_REPOSITORY" --color D93F0B --description "DeepSeek Harness compatibility" --force
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"DeepSeek Harness $DSH_VERSION compatibility tests failed\" in:title" --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            echo "Compatibility issue #$existing already exists."
+            exit 0
+          fi
+          body="$(printf 'The daily compatibility suite failed against **@deepseek-ai/dsh@%s**.\n\n[View the failed workflow run](%s)\n\nThe published plugin and its compatibility pins were not changed.' "$DSH_VERSION" "$RUN_URL")"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --label dsh-compatibility \
+            --title "DeepSeek Harness $DSH_VERSION compatibility tests failed" \
+            --body "$body"
+
+  open-update-pr:
+    needs: [discover, compatibility-test]
+    if: needs.compatibility-test.result == 'success' && needs.discover.outputs.candidate != needs.discover.outputs.current
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - name: Prepare the compatibility update
+        env:
+          DSH_VERSION: ${{ needs.discover.outputs.candidate }}
+          UPDATE_BRANCH: ${{ needs.discover.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/update-dsh-version.mjs "$DSH_VERSION"
+          pnpm install --no-frozen-lockfile
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git checkout -b "$UPDATE_BRANCH"
+          git add README.md dsh-compatibility.json package.json pnpm-lock.yaml
+          git commit -m "chore: support DeepSeek Harness $DSH_VERSION"
+          git push --force origin "HEAD:$UPDATE_BRANCH"
+      - name: Open the tested update pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DSH_VERSION: ${{ needs.discover.outputs.candidate }}
+          UPDATE_BRANCH: ${{ needs.discover.outputs.branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(printf 'The daily compatibility suite passed against **@deepseek-ai/dsh@%s**.\n\n[View the successful workflow run](%s)\n\nThis updates the tested Harness version, exact peer dependencies, development dependencies, and lockfile.' "$DSH_VERSION" "$RUN_URL")"
+          gh pr create --base main --head "$UPDATE_BRANCH" \
+            --title "Support DeepSeek Harness $DSH_VERSION" \
+            --body "$body"
+          issue="$(gh issue list --state open --search "\"DeepSeek Harness $DSH_VERSION compatibility tests failed\" in:title" --json number --jq '.[0].number // empty')"
+          if [[ -n "$issue" ]]; then
+            gh issue comment "$issue" --body "Compatibility now passes. The automated update pull request is ready for review."
+            gh issue close "$issue"
+          fi
