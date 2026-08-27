@@ -63,6 +63,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "node scripts/run-e2e.mjs mock",
     "test:e2e:live": "node scripts/run-e2e.mjs live",
+    "compat:update": "node scripts/update-dsh-version.mjs",
     "typecheck": "tsc --noEmit",
     "check:sessions": "node scripts/check-no-session-access.mjs",
     "check": "pnpm check:sessions && pnpm typecheck && pnpm test && pnpm build",

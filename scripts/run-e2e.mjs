@@ -26,7 +26,11 @@ const dshHome = join(runRoot, 'dsh-home')
 const packageDir = join(runRoot, 'package')
 const workspaceDir = join(runRoot, 'workspace')
 const audioFile = join(runRoot, 'microphone.wav')
-const dshVersion = '0.1.1-rc.2'
+const compatibility = JSON.parse(readFileSync(join(root, 'dsh-compatibility.json'), 'utf8'))
+const dshVersion = process.env.DSH_SPEECH_DSH_VERSION ?? compatibility.testedVersion
+if (typeof dshVersion !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(dshVersion)) {
+  throw new Error('DSH_SPEECH_DSH_VERSION must be a valid semantic version')
+}
 const children = []
 let interrupted = false
 
