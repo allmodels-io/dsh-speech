@@ -1,0 +1,4 @@
+# One row carries both the host plugin and its lazy browser module.
+- insert:
+    - id: ui-speech
+      name: '@allmodels/dsh-speech'
