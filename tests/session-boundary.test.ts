@@ -1,6 +1,8 @@
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { speechApi } from '../src/client/api.ts'
+import { inject } from '../src/index.ts'
 
 async function sourceFiles(dir: string): Promise<string[]> {
   const paths: string[] = []
@@ -21,5 +23,20 @@ describe('session persistence boundary', () => {
       for (const pattern of forbidden) if (pattern.test(source)) violations.push(`${path}: ${String(pattern)}`)
     }
     expect(violations).toEqual([])
+  })
+
+  it('injects no session service and sends no conversation identity to host speech endpoints', async () => {
+    expect(inject).toEqual(['webServer', 'credentials', 'llm'])
+    const fetchMock = vi.fn(async (_path: string, init?: RequestInit) => new Response('{"summary":"Done"}', {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await speechApi.summarize({
+      request: 'Request', answer: 'Answer', locale: 'en', route: { provider: 'p', model: 'm' },
+    })
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+    expect(payload).toEqual({ request: 'Request', answer: 'Answer', locale: 'en', route: { provider: 'p', model: 'm' } })
+    expect(JSON.stringify(payload)).not.toMatch(/sessionId|messageId|sessionPath/u)
+    vi.unstubAllGlobals()
   })
 })

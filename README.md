@@ -1,8 +1,8 @@
 # @allmodels/dsh-speech
 
-Streaming microphone transcription for the DeepSeek Harness web client, powered by [AllModels.io](https://allmodels.io/).
+Streaming microphone transcription and spoken answer summaries for the DeepSeek Harness web client, powered by [AllModels.io](https://allmodels.io/).
 
-`@allmodels/dsh-speech` adds a microphone beside Send, a live amplitude bar below the composer, partial and final transcription, an AllModels account flow, and a dedicated Speech settings page. It is a standalone Cordis bundle and does not patch DeepSeek Harness.
+`@allmodels/dsh-speech` adds a microphone beside Send, live transcription, short spoken versions of completed answers, an AllModels account flow, and a dedicated Speech settings page. It is a standalone Cordis bundle and does not patch DeepSeek Harness.
 
 ## Compatibility
 
@@ -75,6 +75,16 @@ The microphone selector is hidden on mobile layouts, where the browser's system-
 
 Model and streaming details come from the [AllModels provider catalog](https://docs.allmodels.io/models) and [native streaming STT API](https://docs.allmodels.io/api-reference/native-tts/stt/nativeSttStream).
 
+## Spoken summaries
+
+For each newly completed answer, the plugin uses the exact LLM provider/model recorded on that answer to produce plain, speakable prose of at most 90 words. It then creates a complete MP3 through a compatible synchronous AllModels TTS route. Answers already present when a session is first opened are not generated automatically, but their **Play summary** control prepares audio on demand.
+
+Autoplay is enabled by default and can be changed either in **Settings → Speech → Spoken summaries** or from the chat-header toggle. This is one global plugin preference shared by every chat. Changing it affects future answers only.
+
+One browser-global audio player arbitrates all sessions in the current Harness client. A newly prepared summary never interrupts audio already playing and is not queued to start later. Explicitly choosing **Play summary** stops the current summary and plays the selected one. Browser autoplay rejection leaves the waveform ready for a click. This arbitration does not cross browser tabs or windows.
+
+The settings card selects a synchronous MP3 TTS model, a compatible provider, and a discovered voice. A saved compatible choice wins, followed by the provider catalog's advertised default and then the first compatible option.
+
 ## Operator configuration
 
 The bundle row may be given composition-level defaults in a Harness patch:
@@ -88,9 +98,10 @@ The bundle row may be given composition-level defaults in a Harness patch:
         baseURL: https://api.allmodels.io
         lowBalanceUsd: 0.5
         defaultTopUpUsd: 10
+        autoPlay: true
 ```
 
-`baseURL` is deliberately operator-only; it is not editable in the browser. User model, provider, language, and context overrides are stored through the Harness settings service and take effect on the next recording.
+`baseURL` is deliberately operator-only; it is not editable in the browser. User STT and TTS choices plus the global autoplay preference are stored through the Harness settings service. Spoken summary text and audio are not stored.
 
 ## Privacy and session safety
 
@@ -98,6 +109,8 @@ The bundle row may be given composition-level defaults in a Harness patch:
 - API keys remain host-side in the Harness credential service and are inserted only into authenticated AllModels requests.
 - Transcripts remain in the browser's composer draft until the user uses the normal Send arrow or the recording Send arrow.
 - The preferred microphone device ID is kept only in plugin-namespaced browser-local storage. It is not written to Harness sessions.
+- Spoken summaries and MP3 Blob URLs exist only in browser memory. Pending requests are cancelled and Blob URLs are revoked when their UI or the plugin is disposed.
+- Summarization and TTS requests contain prose, locale, and model routing only—never session IDs, message IDs, session paths, or conversation mutation commands.
 - The host plugin does not inject Harness session services, import session packages, read session files, or write session files. A build check fails if a session/filesystem persistence dependency is introduced.
 - The plugin's custom HTTP and WebSocket routes accept only same-origin loopback requests and enforce bounded request/frame sizes.
 
@@ -122,7 +135,7 @@ pnpm test:e2e
 pnpm pack --dry-run
 ```
 
-`pnpm check` runs the no-session-access boundary, TypeScript, unit/protocol tests, and both production bundles. Tests cover catalog defaults, provider capabilities, targeted promotional balances, transcript sequencing/CJK spacing, route security, credential redaction behavior, and the AllModels streaming wire mapping.
+`pnpm check` runs the no-session-access boundary, TypeScript, unit/protocol tests, and both production bundles. Tests cover both catalogs, summarizer routing and bounds, TTS response enforcement, history lifecycle, global playback arbitration, UI accessibility, route security, credential redaction, and the AllModels streaming wire mapping.
 
 `pnpm test:e2e` builds and packs the plugin, installs that tarball into a disposable DeepSeek Harness `0.1.1-rc.2` web profile, launches a local AllModels HTTP/WebSocket mock, and runs the Chromium desktop and mobile suite with a generated virtual microphone. It covers first-run account UI, API-key connection, settings layout and persistence, balance/top-up, microphone placement, preparing/recording/finishing states, live partials and finals, waveform motion, composer locking, Stop-without-send, finish-and-send, Cancel, microphone selection, dark-mode menus, and mobile layout. The disposable profile and workspace are created below the operating system's temporary directory; the runner never opens or modifies the user's Harness profile or sessions.
 

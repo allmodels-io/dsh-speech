@@ -4,7 +4,9 @@ import {
   applyTranscriptEvent,
   createTranscript,
   normalizeCatalog,
+  normalizeVoices,
   selectBinding,
+  selectTtsBinding,
   summarizeBalance,
   transcriptText,
 } from '../src/shared.ts'
@@ -12,12 +14,13 @@ import {
 const catalogFixture = {
   providers: {
     soniox: {
-      defaults: { stt: { model: 'stt-rt-v5' } },
+      defaults: { stt: { model: 'stt-rt-v5' }, tts: { model: 'tts-rt-v1', voice: 'Adrian' } },
       stt: [{
         id: 'stt-rt-v5', canonical: 'soniox/stt-rt-v5', streaming: true,
         streamingInput: { audioFormats: ['pcm_16000'], portableOptions: ['context', 'interim_results'] },
         pricing: { unit: 'minute', unitPrice: '0.01' },
       }],
+      tts: [{ id: 'tts-rt-v1', canonical: 'soniox/tts-rt-v1', aliases: ['soniox/tts-rt-v1-search'], synchronous: true, formats: ['mp3', 'wav'] }],
     },
     assemblyai: {
       defaults: { stt: { model: 'u3-rt-pro' } },
@@ -29,6 +32,7 @@ const catalogFixture = {
     incompatible: {
       defaults: { stt: { model: 'only-24k' } },
       stt: [{ id: 'only-24k', streaming: true, streamingInput: { audioFormats: ['pcm_24000'] } }],
+      tts: [{ id: 'stream-only', synchronous: false, formats: ['mp3'] }, { id: 'wav-only', synchronous: true, formats: ['wav'] }],
     },
   },
 }
@@ -54,6 +58,31 @@ describe('catalog selection', () => {
     const bindings = normalizeCatalog(catalogFixture).bindings
     expect(selectBinding(bindings, 'zh', { model: 'u3-rt-pro', provider: 'assemblyai' })?.provider).toBe('assemblyai')
     expect(selectBinding(bindings, 'zh', { model: 'assemblyai/u3-rt-pro', provider: 'missing' })?.provider).toBe('assemblyai')
+  })
+
+  it('normalizes synchronous MP3 TTS routes and selects saved values before advertised defaults', () => {
+    const bindings = normalizeCatalog(catalogFixture).ttsBindings ?? []
+    expect(bindings).toEqual([{
+      provider: 'soniox', model: 'soniox/tts-rt-v1', canonical: 'soniox/tts-rt-v1',
+      isProviderDefault: true, defaultVoice: 'Adrian', formats: ['mp3', 'wav'], aliases: ['soniox/tts-rt-v1-search'],
+    }])
+    expect(selectTtsBinding(bindings, { model: 'tts-rt-v1', provider: 'soniox' })?.provider).toBe('soniox')
+  })
+
+  it('normalizes the nested voice catalog response', () => {
+    expect(normalizeVoices({ voices: [{ voice: { id: 'voice-1', name: 'Ava', preview_url: 'https://cdn.example/ava.mp3' } }] }, 44))
+      .toEqual({ voices: [{ id: 'voice-1', name: 'Ava', previewUrl: 'https://cdn.example/ava.mp3' }], fetchedAt: 44 })
+  })
+
+  it('keeps the model/provider binding from global voice-search results', () => {
+    expect(normalizeVoices({ voices: [{
+      model: { id: 'fish/s2-1-pro' },
+      voice: { id: 'voice-1', name: 'Elon', languages: [{ id: 'en', name: 'English' }] },
+      providers: [{ id: 'fish', name: 'Fish Audio', default: true, provider_model_id: 's2.1-pro' }],
+    }] }, 45)).toEqual({
+      voices: [{ id: 'voice-1', name: 'Elon', model: 'fish/s2.1-pro', provider: 'fish', providerName: 'Fish Audio', languages: ['en'] }],
+      fetchedAt: 45,
+    })
   })
 })
 

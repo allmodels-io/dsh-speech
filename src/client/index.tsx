@@ -5,6 +5,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { SpeechController } from './controller.ts'
 import { SpeechDock, SpeechInputDock, SpeechMic } from './SpeechComposer.tsx'
 import { SpeechSettings } from './SpeechSettings.tsx'
+import { SpokenSessionObserver, SpokenSummaryTail } from './SpokenSummary.tsx'
+import { SpokenSummaryController } from './spoken-controller.ts'
 import { en, zh } from './locales.ts'
 import { STYLE_TEXT } from './styles.ts'
 import type { SpeechUserSettings } from '../shared.ts'
@@ -13,6 +15,7 @@ export const inject = ['slots', 'locale', 'settingsScope']
 
 export function apply(ctx: ClientContext): void {
   const controller = new SpeechController()
+  const spoken = new SpokenSummaryController()
   const scope = ctx.settingsScope.bind<SpeechUserSettings>({ namespace: 'dsh-speech' })
   const getLocale = (): string => ctx.locale.getLocale().active
 
@@ -44,7 +47,8 @@ export function apply(ctx: ClientContext): void {
       for (const button of document.querySelectorAll<HTMLElement>('[data-dsh-speech-nav]')) delete button.dataset.dshSpeechNav
     }
   }, 'dsh-speech: settings navigation icon')
-  ctx.effect(() => () => { controller.dispose() }, 'dsh-speech: browser controller')
+  ctx.effect(() => () => { controller.dispose(); spoken.dispose() }, 'dsh-speech: browser controllers')
+  void controller.ensureMetadata()
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -79,11 +83,26 @@ export function apply(ctx: ClientContext): void {
       locale: 'speech',
       inject: () => ({ controller, getLocale }),
     }, SpeechInputDock)
+    const spokenTail = scoped.slots.register({
+      name: 'conversation.chat.turnTail',
+      priority: 20,
+      select: owner => ({ turn: owner.turn.turn, seq: owner.seq }),
+      locale: 'speech',
+      inject: () => ({ controller, spoken, scope, getLocale }),
+    }, SpokenSummaryTail)
+    const spokenObserver = scoped.slots.register({
+      name: 'conversation.composer.dock',
+      id: 'spoken-summary-observer',
+      order: 110,
+      inject: () => ({ controller, spoken, scope, getLocale }),
+    }, SpokenSessionObserver)
     return () => {
       controller.detachBlocks(blocks)
       mic()
       dock()
       inputDock()
+      spokenTail()
+      spokenObserver()
     }
   })
 }

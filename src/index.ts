@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { randomBytes } from 'node:crypto'
+import { once } from 'node:events'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
@@ -17,9 +19,10 @@ import {
   type SpeechUserSettings,
 } from './shared.ts'
 import { SttProxy } from './stt-proxy.ts'
+import { summarizeAnswer, validateSummarizeRequest } from './summarizer.ts'
 
 export const name = PLUGIN_NAME
-export const inject = ['webServer', 'credentials']
+export const inject = ['webServer', 'credentials', 'llm']
 export const SPEECH_SETTINGS_NS = settingsNamespace(SETTINGS_NAMESPACE)
 
 export type Config = SpeechSettings
@@ -33,6 +36,10 @@ export const Config: z<Config> = z.object({
   provider: z.string(),
   language: z.string(),
   context: z.string(),
+  ttsModel: z.string(),
+  ttsProvider: z.string(),
+  ttsVoice: z.string(),
+  autoPlay: z.boolean().default(true),
 })
 
 export const UserSettingsConfig: z<SpeechUserSettings> = z.object({
@@ -40,22 +47,46 @@ export const UserSettingsConfig: z<SpeechUserSettings> = z.object({
   provider: z.string(),
   language: z.string(),
   context: z.string(),
+  ttsModel: z.string(),
+  ttsProvider: z.string(),
+  ttsVoice: z.string(),
+  autoPlay: z.boolean().default(true),
 })
 
 const MAX_BODY = 16 * 1024
+const MAX_SUMMARIZE_BODY = 384 * 1024
+const TTS_LEASE_MS = 10 * 60 * 1_000
+const MAX_TTS_LEASES = 128
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, maximum = MAX_BODY): Promise<Record<string, unknown>> {
   let size = 0
   const chunks: Buffer[] = []
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
     size += buffer.length
-    if (size > MAX_BODY) throw new Error('request body too large')
+    if (size > maximum) throw new Error('request body too large')
     chunks.push(buffer)
   }
   const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('expected a JSON object')
   return parsed as Record<string, unknown>
+}
+
+function sendAudio(res: ServerResponse, bytes: Uint8Array): void {
+  res.writeHead(200, {
+    'content-type': 'audio/mpeg',
+    'content-length': String(bytes.byteLength),
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  })
+  res.end(bytes)
+}
+
+class PluginHttpError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string) {
+    super(message)
+    this.name = 'PluginHttpError'
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -73,6 +104,12 @@ function safeError(error: unknown): { status: number; body: { error: { code: str
       ? 'AllModels rejected the credential'
       : error.message.slice(0, 500)
     return { status: error.status >= 400 && error.status < 600 ? error.status : 502, body: { error: { code: error.code, message } } }
+  }
+  if (error instanceof PluginHttpError) {
+    const message = /bearer|authorization|secret|api.?key|\bsk-[A-Za-z0-9_-]+/iu.test(error.message)
+      ? 'Request failed'
+      : error.message.slice(0, 500)
+    return { status: error.status, body: { error: { code: error.code, message } } }
   }
   const message = error instanceof Error && !/api.?key|bearer|secret/i.test(error.message)
     ? error.message.slice(0, 500)
@@ -105,6 +142,10 @@ export function apply(ctx: Context, config: Config): void {
     ...(config.provider === undefined ? {} : { provider: config.provider }),
     ...(config.language === undefined ? {} : { language: config.language }),
     ...(config.context === undefined ? {} : { context: config.context }),
+    ...(config.ttsModel === undefined ? {} : { ttsModel: config.ttsModel }),
+    ...(config.ttsProvider === undefined ? {} : { ttsProvider: config.ttsProvider }),
+    ...(config.ttsVoice === undefined ? {} : { ttsVoice: config.ttsVoice }),
+    autoPlay: config.autoPlay ?? true,
   }
   let userSettingsSource = (): SpeechUserSettings => entrySettings
   const settingsSource = (): SpeechSettings => ({ ...config, ...userSettingsSource() })
@@ -115,8 +156,24 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   const allModels = new AllModelsClient()
+  const pendingSpeech = new Set<AbortController>()
+  const ttsLeases = new Map<string, { request: { text: string; model: string; provider: string; voice: string }; expiresAt: number }>()
   const keyFor = () => credentialRef(settingsSource().apiKeyEnv)
   const resolveCredential = () => ctx.credentials.resolve(keyFor())
+  const withRequestAbort = async <T>(req: IncomingMessage, operation: (signal: AbortSignal) => Promise<T>, res?: ServerResponse): Promise<T> => {
+    const abort = new AbortController()
+    const cancelled = (): void => { abort.abort() }
+    pendingSpeech.add(abort)
+    req.once('aborted', cancelled)
+    res?.once('close', cancelled)
+    try {
+      return await operation(abort.signal)
+    } finally {
+      req.off('aborted', cancelled)
+      res?.off('close', cancelled)
+      pendingSpeech.delete(abort)
+    }
+  }
 
   const register = (method: 'GET' | 'POST', path: string, handler: (req: IncomingMessage) => Promise<unknown>) => {
     ctx.effect(() => ctx.webServer.register({
@@ -137,6 +194,53 @@ export function apply(ctx: Context, config: Config): void {
     }), `${PLUGIN_NAME}: ${method} ${path}`)
   }
 
+  const registerAudio = (path: string, handler: (req: IncomingMessage) => Promise<Uint8Array>) => {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path,
+      handler: async (req, res) => {
+        if (!isTrustedRequest(req, 'POST')) {
+          sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'Forbidden' } })
+          return
+        }
+        try {
+          sendAudio(res, await handler(req))
+        } catch (error) {
+          const safe = safeError(error)
+          sendJson(res, safe.status, safe.body)
+        }
+      },
+    }), `${PLUGIN_NAME}: POST ${path}`)
+  }
+
+  const validateTtsBody = (body: Record<string, unknown>): { text: string; model: string; provider: string; voice: string } => {
+    const { text, model, provider, voice } = body
+    if (typeof text !== 'string' || text.trim().length === 0 || text.length > 4_096) throw new Error('text must contain 1 to 4096 characters')
+    if (typeof model !== 'string' || model.length === 0 || model.length > 512) throw new Error('model is required')
+    if (typeof provider !== 'string' || provider.length === 0 || provider.length > 256) throw new Error('provider is required')
+    if (typeof voice !== 'string' || voice.length === 0 || voice.length > 256) throw new Error('voice is required')
+    return { text, model, provider, voice }
+  }
+
+  const streamSpeech = async (req: IncomingMessage, res: ServerResponse, request: { text: string; model: string; provider: string; voice: string }): Promise<void> => {
+    const credential = await resolveCredential()
+    if (credential === undefined) throw new Error('Connect AllModels first')
+    await withRequestAbort(req, signal => allModels.streamSpeech(settingsSource(), credential.value, request, async chunk => {
+      if (!res.write(chunk)) await once(res, 'drain')
+    }, {
+      signal,
+      start: () => {
+        res.writeHead(200, {
+          'content-type': 'audio/mpeg',
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+          'accept-ranges': 'none',
+        })
+      },
+    }), res)
+    res.end()
+  }
+
   register('GET', '/api/dsh-speech/status', async () => {
     const settings = settingsSource()
     const credential = await ctx.credentials.describe(keyFor())
@@ -145,6 +249,10 @@ export function apply(ctx: Context, config: Config): void {
       ...(settings.provider === undefined ? {} : { provider: settings.provider }),
       ...(settings.language === undefined ? {} : { language: settings.language }),
       ...(settings.context === undefined ? {} : { context: settings.context }),
+      ...(settings.ttsModel === undefined ? {} : { ttsModel: settings.ttsModel }),
+      ...(settings.ttsProvider === undefined ? {} : { ttsProvider: settings.ttsProvider }),
+      ...(settings.ttsVoice === undefined ? {} : { ttsVoice: settings.ttsVoice }),
+      autoPlay: settings.autoPlay,
       lowBalanceUsd: settings.lowBalanceUsd,
       defaultTopUpUsd: settings.defaultTopUpUsd,
     }
@@ -163,6 +271,73 @@ export function apply(ctx: Context, config: Config): void {
     const force = new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1'
     return allModels.catalog(settingsSource(), force)
   })
+
+  register('GET', '/api/dsh-speech/voices', async req => {
+    const query = new URL(req.url ?? '/', 'http://localhost').searchParams
+    const model = query.get('model') ?? undefined
+    const provider = query.get('provider') ?? undefined
+    const q = query.get('q')?.trim() || undefined
+    const language = query.get('language') ?? undefined
+    if ((model?.length ?? 0) > 512 || (provider?.length ?? 0) > 256 || (q?.length ?? 0) > 200 || (language?.length ?? 0) > 32) throw new Error('Invalid voice search')
+    return allModels.voices(settingsSource(), {
+      ...(model === undefined ? {} : { model }),
+      ...(provider === undefined ? {} : { provider }),
+      ...(q === undefined ? {} : { q }),
+      ...(language === undefined ? {} : { language }),
+    })
+  })
+
+  register('POST', '/api/dsh-speech/summarize', async req => {
+    const input = validateSummarizeRequest(await readJson(req, MAX_SUMMARIZE_BODY))
+    try {
+      return await withRequestAbort(req, async signal => ({ summary: await summarizeAnswer(ctx.llm, input, signal) }))
+    } catch {
+      ctx.logger.warn('Spoken summary generation failed for the recorded LLM route')
+      throw new PluginHttpError(502, 'SUMMARY_FAILED', 'The answer\'s recorded LLM route could not prepare a spoken summary')
+    }
+  })
+
+  registerAudio('/api/dsh-speech/tts', async req => {
+    const request = validateTtsBody(await readJson(req))
+    const credential = await resolveCredential()
+    if (credential === undefined) throw new Error('Connect AllModels first')
+    return withRequestAbort(req, signal => allModels.speech(settingsSource(), credential.value, request, signal))
+  })
+
+  register('POST', '/api/dsh-speech/tts/prepare', async req => {
+    const now = Date.now()
+    for (const [token, lease] of ttsLeases) if (lease.expiresAt <= now) ttsLeases.delete(token)
+    while (ttsLeases.size >= MAX_TTS_LEASES) ttsLeases.delete(ttsLeases.keys().next().value as string)
+    const token = randomBytes(24).toString('base64url')
+    const expiresAt = now + TTS_LEASE_MS
+    ttsLeases.set(token, { request: validateTtsBody(await readJson(req)), expiresAt })
+    return { url: `/api/dsh-speech/tts/audio/${token}`, expiresAt }
+  })
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/api/dsh-speech/tts/audio',
+    handler: async (req, res) => {
+      if (!isTrustedRequest(req, 'GET')) {
+        sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'Forbidden' } })
+        return
+      }
+      const token = new URL(req.url ?? '/', 'http://localhost').pathname.slice('/api/dsh-speech/tts/audio/'.length)
+      const lease = /^[A-Za-z0-9_-]{32}$/u.test(token) ? ttsLeases.get(token) : undefined
+      if (lease === undefined || lease.expiresAt <= Date.now()) {
+        if (lease !== undefined) ttsLeases.delete(token)
+        sendJson(res, 404, { error: { code: 'AUDIO_EXPIRED', message: 'This spoken audio has expired. Retry to regenerate it.' } })
+        return
+      }
+      try {
+        await streamSpeech(req, res, lease.request)
+      } catch (error) {
+        const safe = safeError(error)
+        if (!res.headersSent) sendJson(res, safe.status, safe.body)
+        else res.destroy()
+      }
+    },
+  }), `${PLUGIN_NAME}: GET /api/dsh-speech/tts/audio/*`)
 
   register('POST', '/api/dsh-speech/auth/start', async req => {
     await allModels.startAuth(settingsSource(), emailField(await readJson(req)))
@@ -216,6 +391,11 @@ export function apply(ctx: Context, config: Config): void {
     handler: (req, socket, head) => { proxy.handleUpgrade(req, socket, head) },
   }), `${PLUGIN_NAME}: WebSocket /api/dsh-speech/stt`)
   ctx.effect(() => () => { proxy.close() }, `${PLUGIN_NAME}: close speech sockets`)
+  ctx.effect(() => () => {
+    for (const request of pendingSpeech) request.abort()
+    pendingSpeech.clear()
+    ttsLeases.clear()
+  }, `${PLUGIN_NAME}: abort speech requests`)
 }
 
 export {
@@ -226,4 +406,5 @@ export {
   applyTranscriptEvent,
   createTranscript,
   transcriptText,
+  selectTtsBinding,
 } from './shared.ts'

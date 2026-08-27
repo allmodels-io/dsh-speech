@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SpeechUserSettings } from '../shared.ts'
-import { selectBinding } from '../shared.ts'
+import type { SpeechUserSettings, VoiceOption } from '../shared.ts'
+import { preferredTtsSelection, selectBinding, selectLocalizedTtsBinding } from '../shared.ts'
 import { speechApi } from './api.ts'
 import type { SpeechController } from './controller.ts'
 import type { SpeechLocaleKey } from './locales.ts'
@@ -38,6 +38,139 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
   )
 }
 
+function voiceKey(voice: VoiceOption): string {
+  return `${voice.provider ?? ''}\n${voice.model ?? ''}\n${voice.id}`
+}
+
+function useVoiceOptions(
+  filters: { model?: string; provider?: string },
+  query: string,
+  enabled = true,
+): { voices: VoiceOption[]; loading: boolean } {
+  const [voices, setVoices] = useState<VoiceOption[]>([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!enabled) {
+      setVoices([])
+      setLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      setLoading(true)
+      void speechApi.voices({
+        ...(filters.model === undefined ? {} : { model: filters.model }),
+        ...(filters.provider === undefined ? {} : { provider: filters.provider }),
+        ...(query.trim().length === 0 ? {} : { q: query.trim() }),
+      }, controller.signal)
+        .then(result => { setVoices(result.voices.filter(voice => voice.model !== undefined && voice.provider !== undefined)) })
+        .catch(cause => { if (!(cause instanceof DOMException && cause.name === 'AbortError')) setVoices([]) })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    }, 250)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [enabled, filters.model, filters.provider, query])
+
+  return { voices, loading }
+}
+
+function VoicePicker({
+  label, hint, placeholder, loadingLabel, emptyLabel, query, voices, selected, loading, disabled, onQuery, onSelect,
+}: {
+  label: string
+  hint: string | undefined
+  placeholder: string
+  loadingLabel: string
+  emptyLabel: string
+  query: string
+  voices: VoiceOption[]
+  selected: VoiceOption | undefined
+  loading: boolean
+  disabled: boolean
+  onQuery: (value: string) => void
+  onSelect: (voice: VoiceOption) => void
+}): ReactNode {
+  const inputId = useId()
+  const listId = useId()
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const displayed = voices.slice(0, 24)
+
+  useEffect(() => { setActive(0) }, [voices])
+
+  const keyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setOpen(true)
+      setActive(current => Math.min(displayed.length - 1, current + 1))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setOpen(true)
+      setActive(current => Math.max(0, current - 1))
+    } else if (event.key === 'Enter' && open && displayed[active] !== undefined) {
+      event.preventDefault()
+      onSelect(displayed[active]!)
+      setOpen(false)
+    } else if (event.key === 'Escape') {
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div className={styles.voicePicker} onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
+    }}>
+      <label className={styles.label} htmlFor={inputId}>{label}</label>
+      {selected === undefined ? null : (
+        <div className={styles.voiceSelected}>
+          <strong>{selected.name}</strong>
+          <span>{selected.providerName ?? selected.provider} · {selected.model}</span>
+        </div>
+      )}
+      <input
+        id={inputId}
+        className={styles.input}
+        type="search"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-controls={listId}
+        aria-expanded={open}
+        aria-activedescendant={open && displayed[active] !== undefined ? `${listId}-${String(active)}` : undefined}
+        value={query}
+        placeholder={placeholder}
+        disabled={disabled}
+        onFocus={() => { setOpen(true) }}
+        onChange={event => { onQuery(event.target.value); setOpen(true) }}
+        onKeyDown={keyDown}
+      />
+      {hint === undefined ? null : <span className={styles.hint}>{hint}</span>}
+      {!open ? null : (
+        <div id={listId} className={styles.voiceMenu} role="listbox">
+          {loading ? <div className={styles.voiceNotice} role="status">{loadingLabel}</div>
+            : displayed.length === 0 ? <div className={styles.voiceNotice}>{emptyLabel}</div>
+              : displayed.map((voice, index) => (
+                <button
+                  id={`${listId}-${String(index)}`}
+                  key={voiceKey(voice)}
+                  className={styles.voiceOption}
+                  type="button"
+                  role="option"
+                  aria-selected={selected !== undefined && voiceKey(voice) === voiceKey(selected)}
+                  data-active={index === active}
+                  onMouseDown={event => { event.preventDefault() }}
+                  onMouseEnter={() => { setActive(index) }}
+                  onClick={() => { onSelect(voice); setOpen(false) }}
+                >
+                  <span><strong>{voice.name}</strong><small>{voice.providerName ?? voice.provider} · {voice.model}</small></span>
+                  {voice.description === undefined ? null : <small>{voice.description}</small>}
+                </button>
+              ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettingsProps): ReactNode {
   const client = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const settings = useSyncExternalStore(
@@ -57,6 +190,8 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
   const [topUpUrl, setTopUpUrl] = useState<string | null>(null)
   const [languageDraft, setLanguageDraft] = useState('auto')
   const [contextDraft, setContextDraft] = useState('')
+  const [voiceSearch, setVoiceSearch] = useState('')
+  const [modelVoiceSearch, setModelVoiceSearch] = useState('')
 
   useEffect(() => { void controller.ensureMetadata() }, [controller])
   useEffect(() => {
@@ -82,6 +217,37 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
     : providers.find(binding => binding.isProviderDefault)?.provider ?? providers[0]?.provider ?? ''
   const selectedBinding = providers.find(binding => binding.provider === selectedProvider)
   const models = useMemo(() => [...new Set(catalog.map(binding => binding.model))].sort(), [catalog])
+  const ttsCatalog = client.catalog?.ttsBindings ?? []
+  const ttsLocale = value?.language !== undefined && value.language !== 'auto' ? value.language : getLocale()
+  const localizedTts = preferredTtsSelection(ttsLocale)
+  const hasSavedVoiceRoute = value?.ttsModel !== undefined && value.ttsProvider !== undefined && value.ttsVoice !== undefined
+  const ttsBinding = selectLocalizedTtsBinding(ttsCatalog, ttsLocale, {
+    ...(!hasSavedVoiceRoute ? {} : { model: value.ttsModel, provider: value.ttsProvider }),
+  })
+  const selectedTtsModel = ttsBinding?.model ?? value?.ttsModel ?? ''
+  const ttsProviders = ttsCatalog.filter(binding => binding.model === selectedTtsModel)
+  const selectedTtsProvider = ttsProviders.some(binding => binding.provider === value?.ttsProvider)
+    ? value?.ttsProvider ?? ''
+    : ttsProviders.find(binding => binding.isProviderDefault)?.provider ?? ttsProviders[0]?.provider ?? ''
+  const selectedTtsBinding = ttsProviders.find(binding => binding.provider === selectedTtsProvider) ?? ttsBinding
+  const ttsModels = useMemo(() => [...new Set(ttsCatalog.map(binding => binding.model))].sort(), [ttsCatalog])
+  const selectedVoice = (hasSavedVoiceRoute ? value.ttsVoice : undefined)
+    ?? (selectedTtsModel === localizedTts.model && selectedTtsProvider === localizedTts.provider ? localizedTts.voice : undefined)
+    ?? selectedTtsBinding?.defaultVoice ?? ''
+  const defaultVoiceOption: VoiceOption = {
+    id: selectedVoice,
+    name: selectedVoice === localizedTts.voice ? localizedTts.name : selectedVoice,
+    model: selectedTtsModel,
+    provider: selectedTtsProvider,
+  }
+  const globalVoiceResults = useVoiceOptions({}, voiceSearch)
+  const scopedVoiceResults = useVoiceOptions({
+    model: selectedTtsBinding?.aliases?.[0] ?? selectedTtsModel,
+    provider: selectedTtsProvider,
+  }, modelVoiceSearch, selectedTtsModel.length > 0 && selectedTtsProvider.length > 0)
+  const selectedVoiceOption = [...scopedVoiceResults.voices, ...globalVoiceResults.voices].find(voice =>
+    voice.id === selectedVoice && voice.model === selectedTtsModel && voice.provider === selectedTtsProvider)
+    ?? (selectedVoice.length === 0 ? undefined : defaultVoiceOption)
   const remaining = Math.max(0, Math.ceil((codeExpiry - now) / 1_000))
   const connected = client.status?.credential.configured === true
   const writable = settings.writable
@@ -273,6 +439,96 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
             </div>
           </details>
         ) : null}
+        </section>
+
+        <section className={styles.card}>
+        <div className={styles.cardTitle}>
+          <div>
+            <h3>{t('spokenSummaries')}</h3>
+            <p className={styles.hint}>{t('spokenSummariesHint')}</p>
+          </div>
+          <label className={styles.switchLabel}>
+            <input
+              type="checkbox"
+              checked={value?.autoPlay ?? true}
+              disabled={!writable}
+              onChange={event => { write('autoPlay', event.target.checked) }}
+            />
+            <span className={styles.switchTrack} aria-hidden="true"><i /></span>
+            <span>{t('autoplayGlobal')}</span>
+          </label>
+        </div>
+        <div className={styles.grid}>
+          <div className={styles.modelFull}>
+            <VoicePicker
+              label={t('voiceSearch')}
+              hint={t('voiceSearchHint')}
+              placeholder={t('voiceSearchPlaceholder')}
+              loadingLabel={t('loading')}
+              emptyLabel={t('voiceNoResults')}
+              query={voiceSearch}
+              voices={globalVoiceResults.voices}
+              selected={selectedVoiceOption}
+              loading={globalVoiceResults.loading}
+              disabled={!writable}
+              onQuery={setVoiceSearch}
+              onSelect={voice => {
+                if (voice.model === undefined || voice.provider === undefined) return
+                setVoiceSearch(voice.name)
+                setModelVoiceSearch('')
+                void run('setting:ttsVoice', async () => {
+                  await scope.set('ttsVoice', voice.id)
+                  await scope.set('ttsModel', voice.model!)
+                  await scope.set('ttsProvider', voice.provider!)
+                })
+              }}
+            />
+          </div>
+          <div className={styles.modelFull}>
+            <Field label={t('ttsModel')}>
+              <select className={styles.input} value={selectedTtsModel} disabled={!writable || ttsModels.length === 0} onChange={event => {
+                const model = event.target.value
+                const choices = ttsCatalog.filter(binding => binding.model === model)
+                const provider = choices.find(binding => binding.isProviderDefault)?.provider ?? choices[0]?.provider
+                void run('setting:ttsModel', async () => {
+                  await scope.set('ttsModel', model)
+                  if (provider !== undefined) await scope.set('ttsProvider', provider)
+                })
+              }}>
+                {ttsModels.map(model => <option key={model} value={model}>{model}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label={t('ttsProvider')}>
+            <select className={styles.input} value={selectedTtsProvider} disabled={!writable || ttsProviders.length === 0} onChange={event => { write('ttsProvider', event.target.value) }}>
+              {ttsProviders.map(binding => <option key={binding.provider} value={binding.provider}>{binding.provider}</option>)}
+            </select>
+          </Field>
+          <div className={styles.modelFull}>
+            <VoicePicker
+              label={t('ttsVoice')}
+              hint={t('modelVoiceSearchHint', { model: selectedTtsModel })}
+              placeholder={t('modelVoiceSearchPlaceholder')}
+              loadingLabel={t('loading')}
+              emptyLabel={t('voiceNoResults')}
+              query={modelVoiceSearch}
+              voices={scopedVoiceResults.voices}
+              selected={selectedVoiceOption}
+              loading={scopedVoiceResults.loading}
+              disabled={!writable || selectedTtsBinding === undefined}
+              onQuery={setModelVoiceSearch}
+              onSelect={voice => {
+                setModelVoiceSearch(voice.name)
+                void run('setting:ttsVoice', async () => {
+                  await scope.set('ttsVoice', voice.id)
+                  await scope.set('ttsModel', selectedTtsModel)
+                  await scope.set('ttsProvider', selectedTtsProvider)
+                })
+              }}
+            />
+          </div>
+        </div>
+        {ttsCatalog.length === 0 ? <p className={styles.muted}>{t('ttsUnavailable')}</p> : null}
         </section>
 
         <section className={styles.card}>

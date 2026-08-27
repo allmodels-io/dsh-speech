@@ -54,6 +54,7 @@ describe('host Cordis composition', () => {
       set: vi.fn(),
       unset: vi.fn(),
     } as never)
+    ctx.provide('llm', {} as never)
 
     const fiber = ctx.plugin({ inject: [...inject], apply }, Config({} as never))
     await fiber.await()
@@ -64,7 +65,12 @@ describe('host Cordis composition', () => {
       '/api/dsh-speech/auth/verify',
       '/api/dsh-speech/catalog',
       '/api/dsh-speech/status',
+      '/api/dsh-speech/summarize',
       '/api/dsh-speech/top-up',
+      '/api/dsh-speech/tts',
+      '/api/dsh-speech/tts/audio',
+      '/api/dsh-speech/tts/prepare',
+      '/api/dsh-speech/voices',
     ])
     expect(upgrades.map(route => route.path)).toEqual(['/api/dsh-speech/stt'])
 
@@ -76,7 +82,7 @@ describe('host Cordis composition', () => {
       status: 200,
       body: {
         credential: { configured: false, writable: true },
-        settings: { lowBalanceUsd: 0.5, defaultTopUpUsd: 10 },
+        settings: { lowBalanceUsd: 0.5, defaultTopUpUsd: 10, autoPlay: true },
       },
     })
 

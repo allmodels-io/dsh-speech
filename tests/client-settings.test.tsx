@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { createElement } from 'react'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SpeechSettings } from '../src/client/SpeechSettings.tsx'
+import { speechApi } from '../src/client/api.ts'
 import type { SpeechClientState, SpeechController } from '../src/client/controller.ts'
 import { en, type SpeechLocaleKey } from '../src/client/locales.ts'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 function t(key: SpeechLocaleKey, params?: Record<string, unknown>): string {
   let value: string = en[key]
@@ -33,13 +34,13 @@ function renderSettings(inputSnapshot: SnapshotInput) {
     getSnapshot(this: { snapshot: unknown }) { return this.snapshot },
     set: vi.fn(async () => {}),
   }
-  return render(createElement(SpeechSettings, {
+  return Object.assign(render(createElement(SpeechSettings, {
     controller,
     scope,
     getLocale: () => 'en',
     t,
     close: vi.fn(),
-  } as never))
+  } as never)), { scope })
 }
 
 describe('Speech settings account states', () => {
@@ -95,5 +96,38 @@ describe('Speech settings account states', () => {
     expect(view.queryByText(en.promotion)).toBeNull()
     expect(view.queryByText(en.usable)).toBeNull()
     expect(view.queryByText('$2.00')).toBeNull()
+  })
+
+  it('shows compatible spoken-summary model, provider, voice, and global autoplay controls', async () => {
+    const voices = vi.spyOn(speechApi, 'voices').mockImplementation(async filters => ({ voices: [{
+      id: 'voice-default', name: 'Default Voice', model: 'deepgram/aura-2', provider: 'deepgram',
+      description: filters?.q === undefined ? 'Warm and clear' : `Matches ${filters.q}`,
+    }], fetchedAt: 1 }))
+    const view = renderSettings({
+      phase: 'idle', amplitude: 0, metadataLoading: false,
+      status: {
+        credential: { configured: true, writable: true }, settings: { lowBalanceUsd: 0.5, defaultTopUpUsd: 10 },
+      },
+      catalog: {
+        fetchedAt: 1,
+        bindings: [],
+        ttsBindings: [{
+          provider: 'deepgram', model: 'deepgram/aura-2', canonical: 'deepgram/aura-2',
+          isProviderDefault: true, defaultVoice: 'voice-default', formats: ['mp3'], aliases: ['deepgram/aura-2-search'],
+        }],
+      },
+    })
+    expect(view.getByRole('heading', { name: en.spokenSummaries })).toBeTruthy()
+    expect((view.getByLabelText(en.ttsModel) as HTMLSelectElement).value).toBe('deepgram/aura-2')
+    expect((view.getByLabelText(en.ttsProvider) as HTMLSelectElement).value).toBe('deepgram')
+    const modelVoiceSearch = view.getByRole('combobox', { name: en.ttsVoice }) as HTMLInputElement
+    expect(modelVoiceSearch.type).toBe('search')
+    expect((await view.findAllByText('Default Voice')).length).toBeGreaterThan(0)
+    fireEvent.change(modelVoiceSearch, { target: { value: 'warm' } })
+    await waitFor(() => {
+      expect(voices).toHaveBeenCalledWith({ model: 'deepgram/aura-2-search', provider: 'deepgram', q: 'warm' }, expect.any(AbortSignal))
+    })
+    expect(await view.findByText('Matches warm')).toBeTruthy()
+    expect((view.getByLabelText(en.autoplayGlobal) as HTMLInputElement).checked).toBe(true)
   })
 })
