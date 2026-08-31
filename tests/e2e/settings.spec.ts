@@ -56,12 +56,16 @@ test('account setup and the complete Speech settings experience', async ({ page 
   await expect(page.locator('body')).not.toContainText(MOCK_API_KEY)
 
   const model = dialog.getByLabel('STT model')
-  const provider = dialog.getByLabel('Provider')
+  const provider = dialog.getByLabel(/^Provider/u)
   const language = dialog.getByLabel('Language')
   await expect(model).toHaveValue('assemblyai/universal-streaming')
   await expect(provider).toHaveValue('assemblyai')
   await expect(language).toHaveValue('auto')
-  for (const label of await model.locator('option').allTextContents()) expect(label).toMatch(/^[^/]+\/.+/u)
+  await model.focus()
+  const modelList = dialog.getByRole('listbox')
+  await expect(modelList).toBeVisible()
+  for (const label of await modelList.getByRole('option').allTextContents()) expect(label).toMatch(/^[^/]+\/.+/u)
+  await model.press('Escape')
 
   const [modelBox, providerBox, languageBox] = await Promise.all([
     model.boundingBox(), provider.boundingBox(), language.boundingBox(),
@@ -74,7 +78,8 @@ test('account setup and the complete Speech settings experience', async ({ page 
   expect(Math.abs(providerBox!.y - languageBox!.y)).toBeLessThan(3)
 
   await expect(dialog.getByText('Recognition context', { exact: false })).toHaveCount(0)
-  await model.selectOption('soniox/stt-rt-v5')
+  await model.fill('soniox/stt-rt-v5')
+  await dialog.getByRole('option', { name: 'soniox/stt-rt-v5', exact: true }).click()
   await expect(provider).toHaveValue('soniox')
   const contextSummary = dialog.getByText('Recognition context', { exact: false })
   await expect(contextSummary).toBeVisible()
@@ -85,9 +90,11 @@ test('account setup and the complete Speech settings experience', async ({ page 
   await context.blur()
   await expect(dialog.getByRole('status')).toHaveText('Saved')
 
-  await model.selectOption('assemblyai/universal-streaming')
+  await model.fill('assemblyai/universal-streaming')
+  await dialog.getByRole('option', { name: 'assemblyai/universal-streaming', exact: true }).click()
   await expect(dialog.getByLabel('Recognition context')).toBeHidden()
-  await model.selectOption('soniox/stt-rt-v5')
+  await model.fill('soniox/stt-rt-v5')
+  await dialog.getByRole('option', { name: 'soniox/stt-rt-v5', exact: true }).click()
   await contextSummary.click()
   await expect(dialog.getByLabel('Recognition context')).toHaveValue('DeepSeek Harness, AllModels')
 
