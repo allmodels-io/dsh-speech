@@ -79,7 +79,7 @@ Model and streaming details come from the [AllModels provider catalog](https://d
 
 For each newly completed answer, the plugin uses the exact LLM provider/model recorded on that answer to produce concise, plain, speakable prose without an arbitrary word limit. It begins streaming MP3 audio through a compatible AllModels TTS route as soon as validated audio chunks arrive. Answers already present when a session is first opened are not generated automatically, but their **Play summary** control prepares audio on demand.
 
-Autoplay is enabled by default and can be changed either in **Settings → Speech → Spoken summaries** or from the chat-header toggle. This is one global plugin preference shared by every chat. Changing it affects future answers only.
+Text-to-speech summaries and autoplay are enabled by default. Both are global plugin preferences in **Settings → Speech → Spoken summaries**, and autoplay is also available beside the latest spoken-summary player after its first use. Disabling text-to-speech summaries stops playback, cancels pending summary audio, suppresses interaction cues, and hides chat players while preserving the selected model, provider, voice, and autoplay preference.
 
 One browser-global audio player arbitrates all sessions in the current Harness client. A newly prepared summary never interrupts audio already playing and is not queued to start later. Explicitly choosing **Play summary** stops the current summary and plays the selected one. Browser autoplay rejection leaves the waveform ready for a click. This arbitration does not cross browser tabs or windows.
 

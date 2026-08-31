@@ -113,7 +113,7 @@ describe('host Cordis composition', () => {
       status: 200,
       body: {
         credential: { configured: false, writable: true },
-        settings: { lowBalanceUsd: 0.5, defaultTopUpUsd: 10, autoPlay: true },
+        settings: { lowBalanceUsd: 0.5, defaultTopUpUsd: 10, ttsEnabled: true, autoPlay: true },
       },
     })
 
@@ -174,6 +174,37 @@ describe('host Cordis composition', () => {
     expect(replay.read().headers['content-length']).toBe(String(firstChunk.byteLength + secondChunk.byteLength))
     expect([...replay.read().bytes]).toEqual([...firstChunk, ...secondChunk])
     expect(AllModelsClient.prototype.streamSpeech).toHaveBeenCalledOnce()
+    await fiber.dispose()
+  })
+
+  it('rejects text-to-speech work at the host boundary when globally disabled', async () => {
+    const streamSpeech = vi.spyOn(AllModelsClient.prototype, 'streamSpeech').mockResolvedValue()
+    const ctx = new Context()
+    const routes: Route[] = []
+    ctx.provide('webServer', {
+      register(route: Route) { routes.push(route); return () => { routes.splice(routes.indexOf(route), 1) } },
+      registerUpgrade() { return () => {} },
+    } as never)
+    ctx.provide('credentials', {
+      resolve: vi.fn(async () => ({ value: 'secret-value' })),
+      describe: vi.fn(async () => ({ configured: true, writable: true })),
+      set: vi.fn(),
+      unset: vi.fn(),
+    } as never)
+    ctx.provide('llm', {} as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, Config({ ttsEnabled: false } as never))
+    await fiber.await()
+
+    const prepare = routes.find(route => route.path === '/api/dsh-speech/tts/prepare')
+    const output = response()
+    await prepare?.handler(bodyRequest('POST', '/api/dsh-speech/tts/prepare', {
+      text: 'No audio.', model: 'fish/s2.1-pro', provider: 'fish', voice: 'voice',
+    }), output.res)
+    expect(output.read()).toEqual({
+      status: 409,
+      body: { error: { code: 'TTS_DISABLED', message: 'Text-to-speech summaries are disabled' } },
+    })
+    expect(streamSpeech).not.toHaveBeenCalled()
     await fiber.dispose()
   })
 })

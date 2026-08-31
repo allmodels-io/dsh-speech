@@ -26,6 +26,7 @@ function preparationSettings(controller: SpeechController, settings: SpeechUserS
     ? { model: settings.ttsModel, provider: settings.ttsProvider, voice: settings.ttsVoice }
     : fallback
   return {
+    ttsEnabled: settings?.ttsEnabled ?? true,
     autoPlay: settings?.autoPlay ?? true,
     bindings: controller.getSnapshot().catalog?.ttsBindings ?? [],
     ttsModel: selection.model,
@@ -94,7 +95,7 @@ export function SpokenSummaryTail({ controller, spoken, scope, getLocale, seq, u
     if (autoplayHostMessageId !== id || scopeState.value?.autoplayInlineRevealed === true || !scopeState.writable) return
     void scope.set('autoplayInlineRevealed', true)
   }, [autoplayHostMessageId, id, scope, scopeState.value?.autoplayInlineRevealed, scopeState.writable])
-  if (source === undefined) return null
+  if (!settings.ttsEnabled || source === undefined) return null
   const preparing = state.phase === 'preparing'
   const unavailable = source.route === undefined || (client.catalog !== undefined && settings.bindings.length === 0)
   const replay = state.phase === 'ready' && state.ended === true
@@ -183,6 +184,7 @@ export function SpokenSessionObserver({ controller, spoken, scope, getLocale, se
   const settings = useMemo(() => preparationSettings(controller, state.value, speechLocale), [client.catalog, controller, speechLocale, state.value])
   const sources = useMemo(() => spokenSources(nodes, speechLocale, requests), [nodes, requests, speechLocale])
   useEffect(() => { void controller.ensureMetadata() }, [controller])
+  useEffect(() => { spoken.setEnabled(settings.ttsEnabled) }, [settings.ttsEnabled, spoken])
   useEffect(() => {
     if (client.catalog === undefined) return
     spoken.observeSession(String(sessionId), sources, settings)

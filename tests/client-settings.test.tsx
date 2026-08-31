@@ -18,7 +18,7 @@ function t(key: SpeechLocaleKey, params?: Record<string, unknown>): string {
 type SnapshotInput = Omit<SpeechClientState, 'microphones' | 'switchingMicrophone' | 'hasTranscript'>
   & Partial<Pick<SpeechClientState, 'microphones' | 'switchingMicrophone' | 'hasTranscript'>>
 
-function renderSettings(inputSnapshot: SnapshotInput) {
+function renderSettings(inputSnapshot: SnapshotInput, settingValue: Record<string, unknown> = { language: 'auto', context: '' }) {
   const snapshot: SpeechClientState = { microphones: [], switchingMicrophone: false, hasTranscript: false, ...inputSnapshot }
   const controller = {
     getSnapshot: () => snapshot,
@@ -26,7 +26,7 @@ function renderSettings(inputSnapshot: SnapshotInput) {
     ensureMetadata: vi.fn(async () => {}),
   } as unknown as SpeechController
   const scope = {
-    snapshot: { value: { language: 'auto', context: '' }, writable: true },
+    snapshot: { value: settingValue, writable: true },
     subscribe(this: { snapshot: unknown }, _listener: () => void) {
       void this.snapshot
       return () => {}
@@ -89,7 +89,9 @@ describe('Speech settings account states', () => {
     expect(view.getByRole('heading', { name: en.settings })).toBeTruthy()
     expect(view.getByRole('heading', { name: en.balance })).toBeTruthy()
     expect(view.queryByRole('heading', { name: en.signupTitle })).toBeNull()
-    expect((view.getByLabelText(en.model) as HTMLSelectElement).value).toBe('assemblyai/u3-rt-pro')
+    const model = view.getByRole('combobox', { name: en.model }) as HTMLInputElement
+    expect(model.type).toBe('search')
+    expect(model.value).toBe('assemblyai/u3-rt-pro')
     const contextDetails = view.getByText(en.context).closest('details')
     expect(contextDetails?.open).toBe(false)
     expect(view.getByText('$1.00')).toBeTruthy()
@@ -98,7 +100,7 @@ describe('Speech settings account states', () => {
     expect(view.queryByText('$2.00')).toBeNull()
   })
 
-  it('shows compatible spoken-summary model, provider, voice, and global autoplay controls', async () => {
+  it('shows compatible spoken-summary model, provider, voice, and concise global controls', async () => {
     const voices = vi.spyOn(speechApi, 'voices').mockImplementation(async filters => ({ voices: [{
       id: 'voice-default', name: 'Default Voice', model: 'deepgram/aura-2', provider: 'deepgram',
       description: filters?.q === undefined ? 'Warm and clear' : `Matches ${filters.q}`,
@@ -118,7 +120,9 @@ describe('Speech settings account states', () => {
       },
     })
     expect(view.getByRole('heading', { name: en.spokenSummaries })).toBeTruthy()
-    expect((view.getByLabelText(en.ttsModel) as HTMLSelectElement).value).toBe('deepgram/aura-2')
+    const ttsModel = view.getByRole('combobox', { name: en.ttsModel }) as HTMLInputElement
+    expect(ttsModel.type).toBe('search')
+    expect(ttsModel.value).toBe('deepgram/aura-2')
     expect((view.getByLabelText(en.ttsProvider) as HTMLSelectElement).value).toBe('deepgram')
     const modelVoiceSearch = view.getByRole('combobox', { name: en.ttsVoice }) as HTMLInputElement
     expect(modelVoiceSearch.type).toBe('search')
@@ -128,6 +132,71 @@ describe('Speech settings account states', () => {
       expect(voices).toHaveBeenCalledWith({ model: 'deepgram/aura-2-search', provider: 'deepgram', q: 'warm' }, expect.any(AbortSignal))
     })
     expect(await view.findByText('Matches warm')).toBeTruthy()
+    expect((view.getByLabelText(en.ttsEnabled) as HTMLInputElement).checked).toBe(true)
     expect((view.getByLabelText(en.autoplayGlobal) as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(view.getByLabelText(en.ttsEnabled))
+    await waitFor(() => { expect(view.scope.set).toHaveBeenCalledWith('ttsEnabled', false) })
+  })
+
+  it('disables autoplay and voice configuration while text-to-speech summaries are off', () => {
+    const view = renderSettings({
+      phase: 'idle', amplitude: 0, metadataLoading: false,
+      status: {
+        credential: { configured: true, writable: true }, settings: { lowBalanceUsd: 0.5, defaultTopUpUsd: 10, ttsEnabled: false },
+      },
+      catalog: {
+        fetchedAt: 1,
+        bindings: [],
+        ttsBindings: [{
+          provider: 'deepgram', model: 'deepgram/aura-2', canonical: 'deepgram/aura-2',
+          isProviderDefault: true, defaultVoice: 'voice-default', formats: ['mp3'],
+        }],
+      },
+    }, { language: 'auto', context: '', ttsEnabled: false, autoPlay: true })
+    expect((view.getByLabelText(en.ttsEnabled) as HTMLInputElement).checked).toBe(false)
+    expect((view.getByLabelText(en.autoplayGlobal) as HTMLInputElement).disabled).toBe(true)
+    expect((view.getByLabelText(en.voiceSearch) as HTMLInputElement).disabled).toBe(true)
+    expect((view.getByLabelText(en.ttsModel) as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it('filters and selects STT and TTS models from searchable comboboxes', async () => {
+    const view = renderSettings({
+      phase: 'idle', amplitude: 0, metadataLoading: false,
+      status: {
+        credential: { configured: true, writable: true }, settings: { lowBalanceUsd: 0.5, defaultTopUpUsd: 10 },
+      },
+      catalog: {
+        fetchedAt: 1,
+        bindings: [
+          { provider: 'assemblyai', model: 'assemblyai/u3-rt-pro', canonical: 'assemblyai/u3-rt-pro', isProviderDefault: true, contextSupported: true, interimResultsSupported: true },
+          { provider: 'soniox', model: 'soniox/stt-rt-v3', canonical: 'soniox/stt-rt-v3', isProviderDefault: true, contextSupported: true, interimResultsSupported: true },
+        ],
+        ttsBindings: [
+          { provider: 'deepgram', model: 'deepgram/aura-2', canonical: 'deepgram/aura-2', isProviderDefault: true, defaultVoice: 'aura', formats: ['mp3'] },
+          { provider: 'fish-audio', model: 'fish-audio/s1', canonical: 'fish-audio/s1', isProviderDefault: true, defaultVoice: 'elon', formats: ['mp3'] },
+        ],
+      },
+    })
+
+    const sttModel = view.getByRole('combobox', { name: en.model }) as HTMLInputElement
+    fireEvent.focus(sttModel)
+    fireEvent.change(sttModel, { target: { value: 'soniox' } })
+    expect(view.queryByRole('option', { name: 'assemblyai/u3-rt-pro' })).toBeNull()
+    fireEvent.click(view.getByRole('option', { name: 'soniox/stt-rt-v3' }))
+    await waitFor(() => {
+      expect(view.scope.set).toHaveBeenCalledWith('model', 'soniox/stt-rt-v3')
+      expect(view.scope.set).toHaveBeenCalledWith('provider', 'soniox')
+    })
+
+    const ttsModel = view.getByRole('combobox', { name: en.ttsModel }) as HTMLInputElement
+    fireEvent.focus(ttsModel)
+    fireEvent.change(ttsModel, { target: { value: 'fish' } })
+    expect(view.queryByRole('option', { name: 'deepgram/aura-2' })).toBeNull()
+    fireEvent.keyDown(ttsModel, { key: 'ArrowDown' })
+    fireEvent.keyDown(ttsModel, { key: 'Enter' })
+    await waitFor(() => {
+      expect(view.scope.set).toHaveBeenCalledWith('ttsModel', 'fish-audio/s1')
+      expect(view.scope.set).toHaveBeenCalledWith('ttsProvider', 'fish-audio')
+    })
   })
 })

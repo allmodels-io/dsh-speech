@@ -11,11 +11,11 @@ afterEach(cleanup)
 
 function t(key: SpeechLocaleKey): string { return en[key] }
 
-function scope(autoPlay = true, autoplayInlineRevealed = false, legacyAutoplayWasUsed = false) {
+function scope(autoPlay = true, autoplayInlineRevealed = false, legacyAutoplayWasUsed = false, ttsEnabled = true) {
   const set = vi.fn(async () => {})
   const snapshot = {
     status: 'ready' as const,
-    value: { autoPlay, autoplayInlineRevealed },
+    value: { autoPlay, autoplayInlineRevealed, ttsEnabled },
     base: {},
     user: legacyAutoplayWasUsed ? { autoPlay } : {},
     revision: 1,
@@ -33,7 +33,7 @@ function scope(autoPlay = true, autoplayInlineRevealed = false, legacyAutoplayWa
   }
 }
 
-function renderAction(state: SpokenMessageState, autoplayInlineRevealed = false, legacyAutoplayWasUsed = false) {
+function renderAction(state: SpokenMessageState, autoplayInlineRevealed = false, legacyAutoplayWasUsed = false, ttsEnabled = true) {
   const controllerSnapshot = {
     phase: 'idle' as const, amplitude: 0, metadataLoading: false, microphones: [], switchingMicrophone: false,
     catalog: { fetchedAt: 1, bindings: [], ttsBindings: [{
@@ -56,7 +56,7 @@ function renderAction(state: SpokenMessageState, autoplayInlineRevealed = false,
     prepare: vi.fn(async () => {}),
     retry: vi.fn(),
   } as unknown as SpokenSummaryController
-  const settings = scope(true, autoplayInlineRevealed, legacyAutoplayWasUsed)
+  const settings = scope(true, autoplayInlineRevealed, legacyAutoplayWasUsed, ttsEnabled)
   const nodes = [
     { kind: 'user', seq: 1, content: [{ type: 'text', text: 'Request' }] },
     { kind: 'assistant', seq: 2, turn: 1, messageId: 'message', blocks: [{ kind: 'text', text: 'Answer' }], provenance: { provider: 'p', model: 'm' } },
@@ -123,5 +123,10 @@ describe('spoken-summary UI', () => {
     const { settings } = renderAction({ phase: 'idle', duration: 0, progress: 0, peaks: [] }, false, true)
     expect(screen.getByRole('switch', { name: `${en.autoplayInline}: ${en.autoplayOn}` })).toBeDefined()
     expect(settings.set).toHaveBeenCalledWith('autoplayInlineRevealed', true)
+  })
+
+  it('removes spoken-summary players from chat while text-to-speech summaries are globally disabled', () => {
+    const view = renderAction({ phase: 'idle', duration: 0, progress: 0, peaks: [] }, false, false, false)
+    expect(view.container.querySelector('.dsh-speech-summary-player')).toBeNull()
   })
 })

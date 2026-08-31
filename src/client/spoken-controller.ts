@@ -20,6 +20,7 @@ export interface SpokenMessageSource {
 }
 
 export interface SpokenPreparationSettings {
+  ttsEnabled: boolean
   autoPlay: boolean
   bindings: readonly TtsCatalogBinding[]
   ttsModel?: string
@@ -173,6 +174,7 @@ export class SpokenSummaryController {
   private loadedMessageId: string | undefined
   private playbackGeneration = 0
   private snapshot: SpokenControllerSnapshot = { messages: new Map() }
+  private enabled = true
   private disposed = false
   private analyserContext: AudioContext | undefined
   private analyserSource: MediaStreamAudioSourceNode | undefined
@@ -193,6 +195,30 @@ export class SpokenSummaryController {
 
   readonly getSnapshot = (): SpokenControllerSnapshot => this.snapshot
 
+  setEnabled(enabled: boolean): void {
+    if (this.disposed || this.enabled === enabled) return
+    this.enabled = enabled
+    if (enabled) return
+    this.stopActive()
+    this.clearAudioOwnership(true)
+    for (const [messageId, state] of this.states) {
+      state.abort?.abort()
+      state.abort = undefined
+      state.requestGeneration += 1
+      revokeAudioUrl(state.audioUrl)
+      if (state.ephemeral === true) {
+        this.states.delete(messageId)
+        continue
+      }
+      Object.assign(state, {
+        phase: 'idle', summary: undefined, audioUrl: undefined, error: undefined,
+        duration: 0, progress: 0, peaks: EMPTY_PEAKS, ended: false,
+      })
+    }
+    this.voiceCache.clear()
+    this.publish()
+  }
+
   mount(messageId: string): () => void {
     const state = this.ensure(messageId)
     state.mounts += 1
@@ -208,6 +234,7 @@ export class SpokenSummaryController {
 
   observeSession(sessionKey: string, sources: readonly SpokenMessageSource[], settings: SpokenPreparationSettings): void {
     if (this.disposed) return
+    this.setEnabled(settings.ttsEnabled)
     const ids = new Set(sources.map(source => source.messageId))
     const previous = this.observed.get(sessionKey)
     if (previous === undefined) {
@@ -220,21 +247,25 @@ export class SpokenSummaryController {
     for (const source of sources) {
       if (previous.has(source.messageId)) continue
       previous.add(source.messageId)
-      void this.prepare(source, settings, settings.autoPlay)
+      if (settings.ttsEnabled) void this.prepare(source, settings, settings.autoPlay)
+      else this.ensure(source.messageId)
     }
+    if (!settings.ttsEnabled) this.publish()
   }
 
   observeInteractions(sessionKey: string, interactionKeys: readonly string[], locale: string, settings: SpokenPreparationSettings): void {
     if (this.disposed) return
+    this.setEnabled(settings.ttsEnabled)
     for (const key of interactionKeys) {
       const identity = `${sessionKey}\n${key}`
       if (this.observedInteractions.has(identity)) continue
       this.observedInteractions.add(identity)
-      if (settings.autoPlay) void this.prepareCue(`interaction:${identity}`, interactionCue(locale), settings)
+      if (settings.ttsEnabled && settings.autoPlay) void this.prepareCue(`interaction:${identity}`, interactionCue(locale), settings)
     }
   }
 
   async prepare(source: SpokenMessageSource, settings: SpokenPreparationSettings, autoPlay = false): Promise<void> {
+    if (!this.enabled || !settings.ttsEnabled) return
     const state = this.ensure(source.messageId)
     if (state.phase === 'preparing' || state.phase === 'ready' || state.phase === 'playing') {
       if (state.phase === 'ready' && !autoPlay) await this.play(source.messageId, true)
@@ -281,6 +312,7 @@ export class SpokenSummaryController {
   }
 
   private async prepareCue(messageId: string, text: string, settings: SpokenPreparationSettings): Promise<void> {
+    if (!this.enabled || !settings.ttsEnabled) return
     const state = this.ensure(messageId)
     state.ephemeral = true
     const binding = selectLocalizedTtsBinding(settings.bindings, text === INTERACTION_CUES.zh ? 'zh' : 'en', {
@@ -314,7 +346,7 @@ export class SpokenSummaryController {
 
   async play(messageId: string, explicit: boolean): Promise<void> {
     const state = this.states.get(messageId)
-    if (state?.audioUrl === undefined || this.disposed) return
+    if (state?.audioUrl === undefined || this.disposed || !this.enabled) return
     if (!explicit && this.activeMessageId !== undefined && this.activeMessageId !== messageId) return
     if (this.activeMessageId !== undefined && this.activeMessageId !== messageId) this.stopActive()
     const generation = ++this.playbackGeneration
@@ -373,6 +405,7 @@ export class SpokenSummaryController {
   }
 
   retry(source: SpokenMessageSource, settings: SpokenPreparationSettings): void {
+    if (!this.enabled || !settings.ttsEnabled) return
     const state = this.ensure(source.messageId)
     if (this.loadedMessageId === source.messageId) this.clearAudioOwnership(true)
     state.abort?.abort()

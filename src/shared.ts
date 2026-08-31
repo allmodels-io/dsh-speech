@@ -34,12 +34,13 @@ export interface SpeechSettings {
   ttsModel?: string
   ttsProvider?: string
   ttsVoice?: string
+  ttsEnabled?: boolean
   autoPlay?: boolean
   autoplayInlineRevealed?: boolean
 }
 
 export type SpeechUserSettings = Pick<SpeechSettings,
-  'model' | 'provider' | 'language' | 'context' | 'ttsModel' | 'ttsProvider' | 'ttsVoice' | 'autoPlay' | 'autoplayInlineRevealed'>
+  'model' | 'provider' | 'language' | 'context' | 'ttsModel' | 'ttsProvider' | 'ttsVoice' | 'ttsEnabled' | 'autoPlay' | 'autoplayInlineRevealed'>
 
 export interface CatalogBinding {
   provider: string
@@ -184,7 +185,7 @@ export interface CredentialStatus {
 export interface StatusResponse {
   credential: CredentialStatus
   settings: Pick<SpeechSettings,
-    'model' | 'provider' | 'language' | 'context' | 'ttsModel' | 'ttsProvider' | 'ttsVoice' | 'autoPlay'
+    'model' | 'provider' | 'language' | 'context' | 'ttsModel' | 'ttsProvider' | 'ttsVoice' | 'ttsEnabled' | 'autoPlay'
     | 'lowBalanceUsd' | 'defaultTopUpUsd'>
   balance?: BalanceSummary
   balanceError?: string

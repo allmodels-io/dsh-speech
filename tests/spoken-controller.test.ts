@@ -27,6 +27,7 @@ class FakeAudio {
 }
 
 const settings: SpokenPreparationSettings = {
+  ttsEnabled: true,
   autoPlay: true,
   bindings: [{
     provider: 'deepgram', model: 'deepgram/aura-2', canonical: 'deepgram/aura-2',
@@ -256,5 +257,29 @@ describe('browser-global spoken-summary arbitration', () => {
     expect(speechApi.prepareTts).toHaveBeenCalledWith(expect.objectContaining({ text: '我需要你的反馈才能继续。' }), expect.any(AbortSignal))
     expect(target.factoryCalls()).toBe(1)
     expect(target.audio.play).toHaveBeenCalledOnce()
+  })
+
+  it('stops active audio and suppresses summaries and interaction cues while globally disabled', async () => {
+    const target = setup()
+    target.controller.observeSession('session-a', [], settings)
+    target.controller.observeSession('session-a', [source('a')], settings)
+    await settle()
+    expect(target.controller.getSnapshot().activeMessageId).toBe('a')
+
+    const disabled = { ...settings, ttsEnabled: false }
+    target.controller.observeSession('session-a', [source('a'), source('b')], disabled)
+    target.controller.observeInteractions('session-a', ['question:disabled'], 'en', disabled)
+    await settle()
+    expect(target.controller.getSnapshot().activeMessageId).toBeUndefined()
+    expect(target.controller.getSnapshot().messages.get('a')?.phase).toBe('idle')
+    expect(target.controller.getSnapshot().messages.get('a')?.audioUrl).toBeUndefined()
+    expect(speechApi.summarize).toHaveBeenCalledTimes(1)
+    expect(speechApi.prepareTts).toHaveBeenCalledTimes(1)
+
+    target.controller.observeSession('session-a', [source('a'), source('b')], settings)
+    target.controller.observeInteractions('session-a', ['question:disabled'], 'en', settings)
+    await settle()
+    expect(speechApi.summarize).toHaveBeenCalledTimes(1)
+    expect(speechApi.prepareTts).toHaveBeenCalledTimes(1)
   })
 })

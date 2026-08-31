@@ -39,6 +39,7 @@ export const Config: z<Config> = z.object({
   ttsModel: z.string(),
   ttsProvider: z.string(),
   ttsVoice: z.string(),
+  ttsEnabled: z.boolean().default(true),
   autoPlay: z.boolean().default(true),
   autoplayInlineRevealed: z.boolean().default(false),
 })
@@ -51,6 +52,7 @@ export const UserSettingsConfig: z<SpeechUserSettings> = z.object({
   ttsModel: z.string(),
   ttsProvider: z.string(),
   ttsVoice: z.string(),
+  ttsEnabled: z.boolean().default(true),
   autoPlay: z.boolean().default(true),
   autoplayInlineRevealed: z.boolean().default(false),
 })
@@ -149,6 +151,7 @@ function validateSettings(value: Pick<SpeechSettings, 'baseURL' | 'language' | '
 
 export function apply(ctx: Context, config: Config): void {
   validateSettings(config)
+  let handleSettingsChange = (): void => {}
   const entrySettings: SpeechUserSettings = {
     ...(config.model === undefined ? {} : { model: config.model }),
     ...(config.provider === undefined ? {} : { provider: config.provider }),
@@ -157,6 +160,7 @@ export function apply(ctx: Context, config: Config): void {
     ...(config.ttsModel === undefined ? {} : { ttsModel: config.ttsModel }),
     ...(config.ttsProvider === undefined ? {} : { ttsProvider: config.ttsProvider }),
     ...(config.ttsVoice === undefined ? {} : { ttsVoice: config.ttsVoice }),
+    ttsEnabled: config.ttsEnabled ?? true,
     autoPlay: config.autoPlay ?? true,
     autoplayInlineRevealed: config.autoplayInlineRevealed ?? false,
   }
@@ -164,7 +168,7 @@ export function apply(ctx: Context, config: Config): void {
   const settingsSource = (): SpeechSettings => ({ ...config, ...userSettingsSource() })
   installSettingsSection(ctx, SPEECH_SETTINGS_NS, UserSettingsConfig, entrySettings, {
     setSource: source => { userSettingsSource = source },
-    onChange: () => {},
+    onChange: () => { handleSettingsChange() },
     validate: value => { validateSettings({ baseURL: config.baseURL, ...value }) },
   })
 
@@ -173,6 +177,9 @@ export function apply(ctx: Context, config: Config): void {
   const ttsLeases = new Map<string, TtsLease>()
   const keyFor = () => credentialRef(settingsSource().apiKeyEnv)
   const resolveCredential = () => ctx.credentials.resolve(keyFor())
+  const requireTtsEnabled = (): void => {
+    if (settingsSource().ttsEnabled === false) throw new PluginHttpError(409, 'TTS_DISABLED', 'Text-to-speech summaries are disabled')
+  }
   const withRequestAbort = async <T>(req: IncomingMessage, operation: (signal: AbortSignal) => Promise<T>, res?: ServerResponse): Promise<T> => {
     const abort = new AbortController()
     const cancelled = (): void => { abort.abort() }
@@ -246,6 +253,12 @@ export function apply(ctx: Context, config: Config): void {
     lease.abort.abort()
     wakeLease(lease)
     ttsLeases.delete(token)
+  }
+
+  handleSettingsChange = () => {
+    if (settingsSource().ttsEnabled !== false) return
+    for (const request of pendingSpeech) request.abort()
+    for (const token of [...ttsLeases.keys()]) removeLease(token)
   }
 
   const startLease = (
@@ -333,6 +346,7 @@ export function apply(ctx: Context, config: Config): void {
       ...(settings.ttsModel === undefined ? {} : { ttsModel: settings.ttsModel }),
       ...(settings.ttsProvider === undefined ? {} : { ttsProvider: settings.ttsProvider }),
       ...(settings.ttsVoice === undefined ? {} : { ttsVoice: settings.ttsVoice }),
+      ttsEnabled: settings.ttsEnabled,
       autoPlay: settings.autoPlay,
       lowBalanceUsd: settings.lowBalanceUsd,
       defaultTopUpUsd: settings.defaultTopUpUsd,
@@ -369,6 +383,7 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   register('POST', '/api/dsh-speech/summarize', async req => {
+    requireTtsEnabled()
     const input = validateSummarizeRequest(await readJson(req, MAX_SUMMARIZE_BODY))
     try {
       return await withRequestAbort(req, async signal => ({ summary: await summarizeAnswer(ctx.llm, input, signal) }))
@@ -379,6 +394,7 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   registerAudio('/api/dsh-speech/tts', async req => {
+    requireTtsEnabled()
     const request = validateTtsBody(await readJson(req))
     const credential = await resolveCredential()
     if (credential === undefined) throw new Error('Connect AllModels first')
@@ -386,6 +402,7 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   register('POST', '/api/dsh-speech/tts/prepare', async req => {
+    requireTtsEnabled()
     const now = Date.now()
     for (const [token, lease] of ttsLeases) if (lease.expiresAt <= now) removeLease(token)
     while (ttsLeases.size >= MAX_TTS_LEASES) removeLease(ttsLeases.keys().next().value as string)
@@ -411,6 +428,10 @@ export function apply(ctx: Context, config: Config): void {
     handler: async (req, res) => {
       if (!isTrustedRequest(req, 'GET')) {
         sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'Forbidden' } })
+        return
+      }
+      if (settingsSource().ttsEnabled === false) {
+        sendJson(res, 409, { error: { code: 'TTS_DISABLED', message: 'Text-to-speech summaries are disabled' } })
         return
       }
       const token = new URL(req.url ?? '/', 'http://localhost').pathname.slice('/api/dsh-speech/tts/audio/'.length)

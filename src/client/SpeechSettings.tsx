@@ -171,6 +171,107 @@ function VoicePicker({
   )
 }
 
+function ModelPicker({
+  label, placeholder, emptyLabel, options, value, disabled, onSelect,
+}: {
+  label: string
+  placeholder: string
+  emptyLabel: string
+  options: string[]
+  value: string
+  disabled: boolean
+  onSelect: (model: string) => void
+}): ReactNode {
+  const inputId = useId()
+  const listId = useId()
+  const [query, setQuery] = useState(value)
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(-1)
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const displayed = normalizedQuery.length === 0 || query === value
+    ? options
+    : options.filter(option => option.toLocaleLowerCase().includes(normalizedQuery))
+
+  useEffect(() => { setQuery(value) }, [value])
+  useEffect(() => { setActive(-1) }, [query, options])
+
+  const select = (model: string): void => {
+    setQuery(model)
+    setOpen(false)
+    setActive(-1)
+    onSelect(model)
+  }
+
+  const keyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setOpen(true)
+      setActive(current => Math.min(displayed.length - 1, current + 1))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setOpen(true)
+      setActive(current => current < 0 ? displayed.length - 1 : Math.max(0, current - 1))
+    } else if (event.key === 'Enter' && open && displayed[active] !== undefined) {
+      event.preventDefault()
+      select(displayed[active]!)
+    } else if (event.key === 'Escape') {
+      event.stopPropagation()
+      setQuery(value)
+      setOpen(false)
+      setActive(-1)
+    }
+  }
+
+  return (
+    <div className={styles.voicePicker} onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        setQuery(value)
+        setOpen(false)
+        setActive(-1)
+      }
+    }}>
+      <label className={styles.label} htmlFor={inputId}>{label}</label>
+      <input
+        id={inputId}
+        className={styles.input}
+        type="search"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-controls={listId}
+        aria-expanded={open}
+        aria-activedescendant={open && displayed[active] !== undefined ? `${listId}-${String(active)}` : undefined}
+        value={query}
+        placeholder={placeholder}
+        disabled={disabled}
+        onFocus={() => { setOpen(true) }}
+        onChange={event => { setQuery(event.target.value); setOpen(true) }}
+        onKeyDown={keyDown}
+      />
+      {!open ? null : (
+        <div id={listId} className={styles.voiceMenu} role="listbox">
+          {displayed.length === 0 ? <div className={styles.voiceNotice}>{emptyLabel}</div>
+            : displayed.map((model, index) => (
+              <button
+                id={`${listId}-${String(index)}`}
+                key={model}
+                className={styles.voiceOption}
+                type="button"
+                role="option"
+                aria-selected={model === value}
+                data-active={index === active}
+                onMouseDown={event => { event.preventDefault() }}
+                onMouseEnter={() => { setActive(index) }}
+                onClick={() => { select(model) }}
+              >
+                <span><strong>{model}</strong></span>
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettingsProps): ReactNode {
   const client = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const settings = useSyncExternalStore(
@@ -218,6 +319,7 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
   const selectedBinding = providers.find(binding => binding.provider === selectedProvider)
   const models = useMemo(() => [...new Set(catalog.map(binding => binding.model))].sort(), [catalog])
   const ttsCatalog = client.catalog?.ttsBindings ?? []
+  const ttsEnabled = value?.ttsEnabled ?? true
   const ttsLocale = value?.language !== undefined && value.language !== 'auto' ? value.language : getLocale()
   const localizedTts = preferredTtsSelection(ttsLocale)
   const hasSavedVoiceRoute = value?.ttsModel !== undefined && value.ttsProvider !== undefined && value.ttsVoice !== undefined
@@ -240,11 +342,11 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
     model: selectedTtsModel,
     provider: selectedTtsProvider,
   }
-  const globalVoiceResults = useVoiceOptions({}, voiceSearch)
+  const globalVoiceResults = useVoiceOptions({}, voiceSearch, ttsEnabled)
   const scopedVoiceResults = useVoiceOptions({
     model: selectedTtsBinding?.aliases?.[0] ?? selectedTtsModel,
     provider: selectedTtsProvider,
-  }, modelVoiceSearch, selectedTtsModel.length > 0 && selectedTtsProvider.length > 0)
+  }, modelVoiceSearch, ttsEnabled && selectedTtsModel.length > 0 && selectedTtsProvider.length > 0)
   const selectedVoiceOption = [...scopedVoiceResults.voices, ...globalVoiceResults.voices].find(voice =>
     voice.id === selectedVoice && voice.model === selectedTtsModel && voice.provider === selectedTtsProvider)
     ?? (selectedVoice.length === 0 ? undefined : defaultVoiceOption)
@@ -387,9 +489,14 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
         <h3>{t('settings')}</h3>
         <div className={styles.grid}>
           <div className={styles.modelFull}>
-            <Field label={t('model')}>
-              <select className={styles.input} value={selectedModel} disabled={!writable || models.length === 0} onChange={event => {
-                const model = event.target.value
+            <ModelPicker
+              label={t('model')}
+              placeholder={t('modelSearchPlaceholder')}
+              emptyLabel={t('modelNoResults')}
+              options={models}
+              value={selectedModel}
+              disabled={!writable || models.length === 0}
+              onSelect={model => {
                 const choices = catalog.filter(binding => binding.model === model)
                 const provider = choices.find(binding => binding.isProviderDefault)?.provider ?? choices[0]?.provider
                 void run('setting:model', async () => {
@@ -397,10 +504,8 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
                   if (provider !== undefined) await scope.set('provider', provider)
                   await controller.ensureMetadata(true)
                 })
-              }}>
-                {models.map(model => <option key={model} value={model}>{model}</option>)}
-              </select>
-            </Field>
+              }}
+            />
           </div>
           <Field label={t('provider')}>
             <select className={styles.input} value={selectedProvider} disabled={!writable || providers.length === 0} onChange={event => { write('provider', event.target.value) }}>
@@ -447,16 +552,28 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
             <h3>{t('spokenSummaries')}</h3>
             <p className={styles.hint}>{t('spokenSummariesHint')}</p>
           </div>
-          <label className={styles.switchLabel}>
-            <input
-              type="checkbox"
-              checked={value?.autoPlay ?? true}
-              disabled={!writable}
-              onChange={event => { write('autoPlay', event.target.checked) }}
-            />
-            <span className={styles.switchTrack} aria-hidden="true"><i /></span>
-            <span>{t('autoplayGlobal')}</span>
-          </label>
+          <div className={styles.summaryToggles}>
+            <label className={styles.switchLabel}>
+              <input
+                type="checkbox"
+                checked={ttsEnabled}
+                disabled={!writable}
+                onChange={event => { write('ttsEnabled', event.target.checked) }}
+              />
+              <span className={styles.switchTrack} aria-hidden="true"><i /></span>
+              <span>{t('ttsEnabled')}</span>
+            </label>
+            <label className={styles.switchLabel}>
+              <input
+                type="checkbox"
+                checked={value?.autoPlay ?? true}
+                disabled={!writable || !ttsEnabled}
+                onChange={event => { write('autoPlay', event.target.checked) }}
+              />
+              <span className={styles.switchTrack} aria-hidden="true"><i /></span>
+              <span>{t('autoplayGlobal')}</span>
+            </label>
+          </div>
         </div>
         <div className={styles.grid}>
           <div className={styles.modelFull}>
@@ -470,7 +587,7 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
               voices={globalVoiceResults.voices}
               selected={selectedVoiceOption}
               loading={globalVoiceResults.loading}
-              disabled={!writable}
+              disabled={!writable || !ttsEnabled}
               onQuery={setVoiceSearch}
               onSelect={voice => {
                 if (voice.model === undefined || voice.provider === undefined) return
@@ -485,22 +602,25 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
             />
           </div>
           <div className={styles.modelFull}>
-            <Field label={t('ttsModel')}>
-              <select className={styles.input} value={selectedTtsModel} disabled={!writable || ttsModels.length === 0} onChange={event => {
-                const model = event.target.value
+            <ModelPicker
+              label={t('ttsModel')}
+              placeholder={t('modelSearchPlaceholder')}
+              emptyLabel={t('modelNoResults')}
+              options={ttsModels}
+              value={selectedTtsModel}
+              disabled={!writable || !ttsEnabled || ttsModels.length === 0}
+              onSelect={model => {
                 const choices = ttsCatalog.filter(binding => binding.model === model)
                 const provider = choices.find(binding => binding.isProviderDefault)?.provider ?? choices[0]?.provider
                 void run('setting:ttsModel', async () => {
                   await scope.set('ttsModel', model)
                   if (provider !== undefined) await scope.set('ttsProvider', provider)
                 })
-              }}>
-                {ttsModels.map(model => <option key={model} value={model}>{model}</option>)}
-              </select>
-            </Field>
+              }}
+            />
           </div>
           <Field label={t('ttsProvider')}>
-            <select className={styles.input} value={selectedTtsProvider} disabled={!writable || ttsProviders.length === 0} onChange={event => { write('ttsProvider', event.target.value) }}>
+            <select className={styles.input} value={selectedTtsProvider} disabled={!writable || !ttsEnabled || ttsProviders.length === 0} onChange={event => { write('ttsProvider', event.target.value) }}>
               {ttsProviders.map(binding => <option key={binding.provider} value={binding.provider}>{binding.provider}</option>)}
             </select>
           </Field>
@@ -515,7 +635,7 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
               voices={scopedVoiceResults.voices}
               selected={selectedVoiceOption}
               loading={scopedVoiceResults.loading}
-              disabled={!writable || selectedTtsBinding === undefined}
+              disabled={!writable || !ttsEnabled || selectedTtsBinding === undefined}
               onQuery={setModelVoiceSearch}
               onSelect={voice => {
                 setModelVoiceSearch(voice.name)
