@@ -106,7 +106,7 @@ jobs:
         with:
           node-version: 22.22.0
           cache: pnpm
-      - name: Update the candidate dependency set
+      - name: Validate and update the candidate dependency set
         env:
           DSH_VERSION: ${{ needs.discover.outputs.candidate }}
         run: node scripts/update-dsh-version.mjs "$DSH_VERSION"

@@ -20,6 +20,43 @@ if (typeof previousVersion !== 'string') throw new Error('dsh-compatibility.json
 
 const dependencyNames = Object.keys(packageJson.peerDependencies ?? {})
   .filter(name => name.startsWith('@deepseek-ai/dsh-'))
+  .sort()
+
+const registryUrl = new URL(process.env.DSH_SPEECH_NPM_REGISTRY ?? 'https://registry.npmjs.org/')
+if (!registryUrl.pathname.endsWith('/')) registryUrl.pathname += '/'
+
+async function inspectPublishedVersion(name) {
+  const url = new URL(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`, registryUrl)
+  const response = await fetch(url, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (response.status === 404) return { name, status: 'missing' }
+  if (!response.ok) {
+    throw new Error(`Unable to verify ${name}@${version}: npm registry returned HTTP ${response.status}`)
+  }
+  const metadata = await response.json()
+  if (metadata?.version !== version) {
+    throw new Error(`Unable to verify ${name}@${version}: npm registry returned unexpected metadata`)
+  }
+  return { name, status: 'published' }
+}
+
+const inspected = await Promise.all([
+  inspectPublishedVersion('@deepseek-ai/dsh'),
+  ...dependencyNames.map(inspectPublishedVersion),
+])
+const missing = inspected.filter(result => result.status === 'missing').map(result => result.name)
+
+if (missing.length > 0) {
+  const details = missing.map(name => `  - ${name}@${version}`).join('\n')
+  throw new Error([
+    `DeepSeek Harness ${version} does not publish every package required by this plugin:`,
+    details,
+    'Harness may have renamed or removed these packages. Update the plugin dependency contract before testing this release.',
+    'No compatibility files were changed.',
+  ].join('\n'))
+}
 
 for (const name of dependencyNames) {
   packageJson.peerDependencies[name] = version
