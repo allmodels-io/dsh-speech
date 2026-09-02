@@ -7,11 +7,13 @@ import { speechApi } from './api.ts'
 import type { SpeechController } from './controller.ts'
 import type { SpeechLocaleKey } from './locales.ts'
 import { styles } from './styles.ts'
+import type { SummaryCache } from './summary-cache.ts'
 
 export interface SpeechSettingsInjected {
   controller: SpeechController
   scope: SettingsScope<SpeechUserSettings>
   getLocale: () => string
+  summaryCache: SummaryCache
 }
 
 export type SpeechSettingsProps = PropsRuntime<'settings.section'>
@@ -272,7 +274,7 @@ function ModelPicker({
   )
 }
 
-export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettingsProps): ReactNode {
+export function SpeechSettings({ controller, scope, getLocale, summaryCache, t }: SpeechSettingsProps): ReactNode {
   const client = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const settings = useSyncExternalStore(
     listener => scope.subscribe(listener),
@@ -649,6 +651,15 @@ export function SpeechSettings({ controller, scope, getLocale, t }: SpeechSettin
           </div>
         </div>
         {ttsCatalog.length === 0 ? <p className={styles.muted}>{t('ttsUnavailable')}</p> : null}
+        <div className={styles.summaryCache}>
+          <div>
+            <strong>{t('summaryCache')}</strong>
+            <p className={styles.hint}>{t('summaryCacheHint')}</p>
+          </div>
+          <button className={styles.secondary} type="button" disabled={busy !== null} onClick={() => {
+            void run('clear-summary-cache', async () => { await summaryCache.clear(); setMessage(t('summaryCacheCleared')) })
+          }}>{busy === 'clear-summary-cache' ? t('loading') : t('clearSummaryCache')}</button>
+        </div>
         </section>
 
         <section className={styles.card}>

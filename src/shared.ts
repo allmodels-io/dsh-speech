@@ -9,6 +9,8 @@ export const AUDIO_FORMAT = 'pcm_16000' as const
 export const MAX_TTS_CHARACTERS = 4_096
 export const MAX_SUMMARY_REQUEST_CHARACTERS = 16_000
 export const MAX_SUMMARY_ANSWER_CHARACTERS = 64_000
+// Bump whenever the summarization instructions or output semantics change.
+export const SUMMARY_PROMPT_VERSION = 1
 export const DEFAULT_ENGLISH_TTS = {
   model: 'fish/s2.1-pro',
   provider: 'fish',

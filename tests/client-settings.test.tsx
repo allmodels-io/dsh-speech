@@ -34,13 +34,15 @@ function renderSettings(inputSnapshot: SnapshotInput, settingValue: Record<strin
     getSnapshot(this: { snapshot: unknown }) { return this.snapshot },
     set: vi.fn(async () => {}),
   }
+  const summaryCache = { clear: vi.fn(async () => {}) }
   return Object.assign(render(createElement(SpeechSettings, {
     controller,
     scope,
+    summaryCache,
     getLocale: () => 'en',
     t,
     close: vi.fn(),
-  } as never)), { scope })
+  } as never)), { scope, summaryCache })
 }
 
 describe('Speech settings account states', () => {
@@ -136,6 +138,9 @@ describe('Speech settings account states', () => {
     expect((view.getByLabelText(en.autoplayGlobal) as HTMLInputElement).checked).toBe(true)
     fireEvent.click(view.getByLabelText(en.ttsEnabled))
     await waitFor(() => { expect(view.scope.set).toHaveBeenCalledWith('ttsEnabled', false) })
+    fireEvent.click(view.getByRole('button', { name: en.clearSummaryCache }))
+    await waitFor(() => { expect(view.summaryCache.clear).toHaveBeenCalledOnce() })
+    expect(await view.findByText(en.summaryCacheCleared)).toBeTruthy()
   })
 
   it('disables autoplay and voice configuration while text-to-speech summaries are off', () => {

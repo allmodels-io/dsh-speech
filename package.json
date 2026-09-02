@@ -1,6 +1,6 @@
 {
   "name": "@allmodels/dsh-speech",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Speech-to-text and spoken answer summaries for DeepSeek Harness using AllModels.io.",
   "keywords": [
     "dsh-plugin",

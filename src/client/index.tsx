@@ -7,6 +7,8 @@ import { SpeechDock, SpeechInputDock, SpeechMic } from './SpeechComposer.tsx'
 import { SpeechSettings } from './SpeechSettings.tsx'
 import { SpokenSessionObserver, SpokenSummaryTail } from './SpokenSummary.tsx'
 import { SpokenSummaryController } from './spoken-controller.ts'
+import { SidebarPlaybackIndicator } from './sidebar-playback-indicator.ts'
+import { SummaryCache } from './summary-cache.ts'
 import { en, zh } from './locales.ts'
 import { STYLE_TEXT } from './styles.ts'
 import type { SpeechUserSettings } from '../shared.ts'
@@ -15,7 +17,9 @@ export const inject = ['slots', 'locale', 'settingsScope']
 
 export function apply(ctx: ClientContext): void {
   const controller = new SpeechController()
-  const spoken = new SpokenSummaryController()
+  const summaryCache = new SummaryCache()
+  const spoken = new SpokenSummaryController(undefined, summaryCache)
+  const sidebarPlayback = new SidebarPlaybackIndicator(spoken)
   const scope = ctx.settingsScope.bind<SpeechUserSettings>({ namespace: 'dsh-speech' })
   const getLocale = (): string => ctx.locale.getLocale().active
 
@@ -47,7 +51,7 @@ export function apply(ctx: ClientContext): void {
       for (const button of document.querySelectorAll<HTMLElement>('[data-dsh-speech-nav]')) delete button.dataset.dshSpeechNav
     }
   }, 'dsh-speech: settings navigation icon')
-  ctx.effect(() => () => { controller.dispose(); spoken.dispose() }, 'dsh-speech: browser controllers')
+  ctx.effect(() => () => { sidebarPlayback.dispose(); controller.dispose(); spoken.dispose(); summaryCache.dispose() }, 'dsh-speech: browser controllers')
   void controller.ensureMetadata()
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
@@ -56,7 +60,7 @@ export function apply(ctx: ClientContext): void {
     order: 30,
     label: () => ctx.locale.bind('speech')('nav'),
     locale: 'speech',
-    inject: () => ({ controller, scope, getLocale }),
+    inject: () => ({ controller, scope, getLocale, summaryCache }),
   }, SpeechSettings))
 
   ctx.inject(['conversation'], scoped => {
@@ -83,25 +87,25 @@ export function apply(ctx: ClientContext): void {
       locale: 'speech',
       inject: () => ({ controller, getLocale }),
     }, SpeechInputDock)
-    const spokenTail = scoped.slots.register({
-      name: 'conversation.chat.turnTail',
-      priority: 20,
-      select: owner => ({ turn: owner.turn.turn, seq: owner.seq }),
+    const spokenAction = scoped.slots.register({
+      name: 'conversation.chat.assistant-actions',
+      id: 'spoken-summary',
+      order: -100,
       locale: 'speech',
-      inject: () => ({ controller, spoken, scope, getLocale }),
+      inject: () => ({ controller, spoken, scope, getLocale, sidebarPlayback }),
     }, SpokenSummaryTail)
     const spokenObserver = scoped.slots.register({
       name: 'conversation.composer.dock',
       id: 'spoken-summary-observer',
       order: 110,
-      inject: () => ({ controller, spoken, scope, getLocale }),
+      inject: () => ({ controller, spoken, scope, getLocale, sidebarPlayback }),
     }, SpokenSessionObserver)
     return () => {
       controller.detachBlocks(blocks)
       mic()
       dock()
       inputDock()
-      spokenTail()
+      spokenAction()
       spokenObserver()
     }
   })

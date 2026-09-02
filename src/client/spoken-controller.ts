@@ -8,11 +8,13 @@ import {
   type TtsCatalogBinding,
 } from '../shared.ts'
 import { speechApi } from './api.ts'
+import { SummaryCache } from './summary-cache.ts'
 
 export type SpokenPhase = 'idle' | 'preparing' | 'ready' | 'playing' | 'error'
 
 export interface SpokenMessageSource {
   messageId: string
+  seq: number
   request: string
   answer: string
   locale: string
@@ -42,6 +44,7 @@ export interface SpokenMessageState {
 export interface SpokenControllerSnapshot {
   messages: ReadonlyMap<string, SpokenMessageState>
   activeMessageId?: string
+  activeSessionKey?: string
 }
 
 interface MutableMessage extends SpokenMessageState {
@@ -59,6 +62,7 @@ interface AudioLike {
   ended: boolean
   paused: boolean
   preload: string
+  onplaying: ((event: Event) => void) | null
   onended: ((event: Event) => void) | null
   onerror: ((event: Event) => void) | null
   onpause: ((event: Event) => void) | null
@@ -68,6 +72,11 @@ interface AudioLike {
   removeAttribute(name: string): void
   load(): void
   captureStream?: (() => MediaStream) | undefined
+}
+
+interface ObservedSession {
+  ids: Set<string>
+  maxSeq: number
 }
 
 const EMPTY_PEAKS = Object.freeze(Array.from({ length: 48 }, (_, index) => 0.15 + 0.08 * Math.sin(index * 0.73) ** 2))
@@ -90,10 +99,21 @@ function boundSource(text: string, maximum: number): string {
 }
 
 /** Derive only the closing finalized assistant message for each completed turn. */
-export function spokenSources(nodes: readonly ConversationNode[], locale: string, requests: readonly RequestView[] = []): SpokenMessageSource[] {
+export function spokenSources(
+  nodes: readonly ConversationNode[],
+  locale: string,
+  turnEnds: ReadonlyMap<number, number>,
+  requests: readonly RequestView[] = [],
+): SpokenMessageSource[] {
   const closings = new Map<number, Extract<ConversationNode, { kind: 'assistant' }>>()
   for (const node of nodes) {
     if (node.kind !== 'assistant' || node.messageId === undefined || node.interrupted === true) continue
+    // An assistant/message is finalized at the model-request level, but it can
+    // still be an intermediate agent-loop step followed by tools or another
+    // model call. Only turn/end makes it the user's final response.
+    if (!turnEnds.has(node.turn)) continue
+    const answer = node.blocks.filter(block => block.kind === 'text').map(block => block.text).join('\n').trim()
+    if (answer.length === 0) continue
     const current = closings.get(node.turn)
     if (current === undefined || node.seq > current.seq) closings.set(node.turn, node)
   }
@@ -123,6 +143,7 @@ export function spokenSources(nodes: readonly ConversationNode[], locale: string
     }
     result.push({
       messageId: String(assistant.messageId),
+      seq: assistant.seq,
       request: boundSource(request, MAX_SUMMARY_REQUEST_CHARACTERS),
       answer: boundSource(answer, MAX_SUMMARY_ANSWER_CHARACTERS),
       locale,
@@ -167,10 +188,14 @@ export class SpokenSummaryController {
   private readonly audio: AudioLike
   private readonly listeners = new Set<() => void>()
   private readonly states = new Map<string, MutableMessage>()
-  private readonly observed = new Map<string, Set<string>>()
+  private readonly observed = new Map<string, ObservedSession>()
+  private readonly messageSessions = new Map<string, string>()
   private readonly observedInteractions = new Set<string>()
+  private readonly observedInteractionSessions = new Set<string>()
+  private readonly autoplayConsumed = new Set<string>()
   private readonly voiceCache = new Map<string, Promise<readonly string[]>>()
   private activeMessageId: string | undefined
+  private activeSessionKey: string | undefined
   private loadedMessageId: string | undefined
   private playbackGeneration = 0
   private snapshot: SpokenControllerSnapshot = { messages: new Map() }
@@ -184,7 +209,7 @@ export class SpokenSummaryController {
   private analysisTick = 0
   private pauseResolutionTimer: ReturnType<typeof setTimeout> | undefined
 
-  constructor(audioFactory: () => AudioLike = browserAudio) {
+  constructor(audioFactory: () => AudioLike = browserAudio, private readonly summaryCache = new SummaryCache()) {
     this.audio = audioFactory()
   }
 
@@ -236,31 +261,45 @@ export class SpokenSummaryController {
     if (this.disposed) return
     this.setEnabled(settings.ttsEnabled)
     const ids = new Set(sources.map(source => source.messageId))
+    const maxSeq = sources.reduce((maximum, source) => Math.max(maximum, source.seq), -1)
+    for (const id of ids) this.messageSessions.set(id, sessionKey)
     const previous = this.observed.get(sessionKey)
     if (previous === undefined) {
-      this.observed.set(sessionKey, ids)
+      this.observed.set(sessionKey, { ids, maxSeq })
       for (const id of ids) this.ensure(id)
       this.publish()
       return
     }
-    this.observed.set(sessionKey, new Set([...previous, ...ids]))
+    const previousMaxSeq = previous.maxSeq
+    let changed = false
     for (const source of sources) {
-      if (previous.has(source.messageId)) continue
-      previous.add(source.messageId)
-      if (settings.ttsEnabled) void this.prepare(source, settings, settings.autoPlay)
+      if (previous.ids.has(source.messageId)) continue
+      previous.ids.add(source.messageId)
+      changed = true
+      // History pagination can introduce unseen messages below the live high-water
+      // mark. Keep their controls available, but never mistake them for new replies.
+      if (settings.ttsEnabled && source.seq > previousMaxSeq) void this.prepare(source, settings, settings.autoPlay)
       else this.ensure(source.messageId)
     }
-    if (!settings.ttsEnabled) this.publish()
+    previous.maxSeq = Math.max(previous.maxSeq, maxSeq)
+    if (changed && (!settings.ttsEnabled || sources.some(source => source.seq <= previousMaxSeq))) this.publish()
   }
 
   observeInteractions(sessionKey: string, interactionKeys: readonly string[], locale: string, settings: SpokenPreparationSettings): void {
     if (this.disposed) return
     this.setEnabled(settings.ttsEnabled)
+    if (!this.observedInteractionSessions.has(sessionKey)) {
+      this.observedInteractionSessions.add(sessionKey)
+      for (const key of interactionKeys) this.observedInteractions.add(`${sessionKey}\n${key}`)
+      return
+    }
     for (const key of interactionKeys) {
       const identity = `${sessionKey}\n${key}`
       if (this.observedInteractions.has(identity)) continue
       this.observedInteractions.add(identity)
-      if (settings.ttsEnabled && settings.autoPlay) void this.prepareCue(`interaction:${identity}`, interactionCue(locale), settings)
+      const messageId = `interaction:${identity}`
+      this.messageSessions.set(messageId, sessionKey)
+      if (settings.ttsEnabled && settings.autoPlay) void this.prepareCue(messageId, interactionCue(locale), settings)
     }
   }
 
@@ -291,19 +330,28 @@ export class SpokenSummaryController {
     try {
       const voice = await this.voiceFor(binding, settings.ttsVoice)
       if (voice === undefined) throw new Error('No compatible voice is available for this text-to-speech route.')
-      const { summary } = await speechApi.summarize({
+      const summaryInput = {
         request: source.request || 'No preceding user prose was available.',
         answer: source.answer,
         locale: source.locale,
         route: source.route,
-      }, abort.signal)
+      }
+      let summary = await this.summaryCache.get(summaryInput)
+      if (this.disposed || abort.signal.aborted || state.requestGeneration !== requestGeneration) return
+      if (summary === undefined) {
+        summary = (await speechApi.summarize(summaryInput, abort.signal)).summary
+        if (this.disposed || abort.signal.aborted || state.requestGeneration !== requestGeneration) return
+        await this.summaryCache.set(summaryInput, summary)
+      }
       const prepared = await speechApi.prepareTts({ text: summary, model: binding.model, provider: binding.provider, voice }, abort.signal)
       if (this.disposed || abort.signal.aborted || state.requestGeneration !== requestGeneration) return
       state.abort = undefined
       this.patch(source.messageId, {
         phase: 'ready', summary, audioUrl: prepared.url, duration: 0, progress: 0, peaks: EMPTY_PEAKS, error: undefined, ended: false,
       })
-      if (autoPlay && this.activeMessageId === undefined) await this.play(source.messageId, false)
+      if (autoPlay && this.activeMessageId === undefined && !this.autoplayConsumed.has(source.messageId)) {
+        await this.play(source.messageId, false)
+      }
     } catch (error) {
       if (abort.signal.aborted || state.requestGeneration !== requestGeneration) return
       state.abort = undefined
@@ -384,10 +432,19 @@ export class SpokenSummaryController {
       const duration = Number.isFinite(this.audio.duration) ? this.audio.duration : state.duration
       this.patch(messageId, { progress: Math.max(0, this.audio.currentTime), duration: Math.max(0, duration) })
     }
+    this.audio.onplaying = () => {
+      if (!this.owns(generation, messageId)) return
+      // A summary is considered consumed as soon as audible playback starts. This
+      // also covers a user pausing before the play() promise settles.
+      this.autoplayConsumed.add(messageId)
+    }
     this.patch(messageId, { phase: 'playing', ended: false })
     try {
       await this.audio.play()
       if (!this.owns(generation, messageId)) return
+      this.autoplayConsumed.add(messageId)
+      this.activeSessionKey = this.messageSessions.get(messageId)
+      this.publish()
       this.startAnalysis(messageId, generation)
     } catch {
       if (!this.owns(generation, messageId)) return
@@ -427,7 +484,10 @@ export class SpokenSummaryController {
     }
     this.states.clear()
     this.observed.clear()
+    this.messageSessions.clear()
     this.observedInteractions.clear()
+    this.observedInteractionSessions.clear()
+    this.autoplayConsumed.clear()
     this.voiceCache.clear()
     void this.analyserContext?.close().catch(() => {})
     this.analyserContext = undefined
@@ -605,7 +665,9 @@ export class SpokenSummaryController {
     this.stopAnalysis()
     this.clearPauseResolution()
     this.activeMessageId = undefined
+    this.activeSessionKey = undefined
     this.audio.onended = null
+    this.audio.onplaying = null
     this.audio.onerror = null
     this.audio.onpause = null
     this.audio.ontimeupdate = null
@@ -642,6 +704,7 @@ export class SpokenSummaryController {
         ...(state.ended === undefined ? {} : { ended: state.ended }),
       }])),
       ...(this.activeMessageId === undefined ? {} : { activeMessageId: this.activeMessageId }),
+      ...(this.activeSessionKey === undefined ? {} : { activeSessionKey: this.activeSessionKey }),
     }
     for (const listener of this.listeners) listener()
   }
