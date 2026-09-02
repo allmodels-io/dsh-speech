@@ -156,13 +156,13 @@ After all jobs for a `main` push pass, the Release workflow checks out the exact
 
 ## Harness compatibility monitoring
 
-GitHub Actions checks npm once per day for the most recently published `@deepseek-ai/dsh` version. It exits without installing browsers when that version is already tracked in `dsh-compatibility.json`, or when the same version already has an open compatibility issue or update pull request.
+GitHub Actions checks npm once per day for the most recently published stable or `-rc` `@deepseek-ai/dsh` version. Alpha, beta, canary, development, and other prerelease channels are ignored. It exits without installing browsers when the newest eligible version is already tracked in `dsh-compatibility.json`, or when the same version already has an open compatibility issue or update pull request.
 
 For a new version, the workflow updates the Harness peer/development dependency pins in an isolated checkout, installs that dependency set, runs the static and unit gates, packs the plugin into a disposable profile, and runs the desktop/mobile Chromium suite. It never receives the live AllModels or DeepSeek credentials.
 
 - A failure creates one `dsh-compatibility` issue for that Harness version with a link to the failed run. Later daily checks do not duplicate it.
 - A pass opens a reviewable pull request updating the tested version, peer dependencies, development dependencies, README, and lockfile. Merging remains manual.
-- A manual run can target an explicit version or force a retest. When a forced retest fixes an open compatibility issue, the successful update pull request closes it.
+- A manual run can target an explicit stable or `-rc` version or force a retest. Other prerelease channels are rejected by the same release policy used by the daily scheduler. When a forced retest fixes an open compatibility issue, the successful update pull request closes it.
 
 Workflow-created pull requests require the repository’s **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** option. The compatibility workflow requests only the exact `contents`, `pull-requests`, and `issues` write permissions needed by its update job and contains no approval operation.
 

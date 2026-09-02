@@ -24,6 +24,7 @@ describe('GitHub Actions credential boundary', () => {
     expect(compatibility).toContain("cron: '27 3 * * *'")
     expect(compatibility).toContain('workflow_dispatch:')
     expect(compatibility).toContain('npm view @deepseek-ai/dsh time --json')
+    expect(compatibility).toContain('node scripts/select-dsh-release.mjs')
     expect(compatibility).toContain('DSH_SPEECH_DSH_VERSION: ${{ needs.discover.outputs.candidate }}')
     expect(compatibility).toContain('gh issue list --repo "$GITHUB_REPOSITORY" --state open')
     expect(compatibility).toContain('gh issue create --repo "$GITHUB_REPOSITORY"')

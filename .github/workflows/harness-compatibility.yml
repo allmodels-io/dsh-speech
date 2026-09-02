@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Specific @deepseek-ai/dsh version (blank uses the newest published version)
+        description: Specific stable or rc @deepseek-ai/dsh version (blank uses the newest eligible release)
         required: false
         type: string
       force:
@@ -52,17 +52,9 @@ jobs:
           current="$(node -p "require('./dsh-compatibility.json').testedVersion")"
           candidate="$REQUESTED_VERSION"
           if [[ -z "$candidate" ]]; then
-            candidate="$(npm view @deepseek-ai/dsh time --json | node -e '
-              let input = ""
-              process.stdin.on("data", chunk => { input += chunk })
-              process.stdin.on("end", () => {
-                const releases = Object.entries(JSON.parse(input))
-                  .filter(([name]) => name !== "created" && name !== "modified")
-                  .sort((left, right) => Date.parse(right[1]) - Date.parse(left[1]))
-                if (releases.length === 0) process.exit(1)
-                process.stdout.write(releases[0][0])
-              })
-            ')"
+            candidate="$(npm view @deepseek-ai/dsh time --json | node scripts/select-dsh-release.mjs)"
+          else
+            candidate="$(node scripts/select-dsh-release.mjs "$candidate")"
           fi
           resolved="$(npm view "@deepseek-ai/dsh@$candidate" version --json | node -e '
             let input = ""
