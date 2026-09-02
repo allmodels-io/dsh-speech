@@ -5,6 +5,7 @@ import { preferredTtsSelection } from '../shared.ts'
 import type { SpeechUserSettings } from '../shared.ts'
 import type { SpeechController } from './controller.ts'
 import type { SpokenSummaryController } from './spoken-controller.ts'
+import type { SidebarPlaybackIndicator } from './sidebar-playback-indicator.ts'
 import { spokenSources, type SpokenMessageSource, type SpokenPreparationSettings } from './spoken-controller.ts'
 import { styles } from './styles.ts'
 
@@ -13,9 +14,10 @@ export interface SpokenInjected {
   spoken: SpokenSummaryController
   scope: SettingsScope<SpeechUserSettings>
   getLocale: () => string
+  sidebarPlayback: SidebarPlaybackIndicator
 }
 
-type TailProps = PropsRuntime<'conversation.chat.turnTail'> & PropsLocale<'speech'> & InjectFace<SpokenInjected>
+type TailProps = PropsRuntime<'conversation.chat.assistant-actions'> & PropsLocale<'speech'> & InjectFace<SpokenInjected>
 type ObserverProps = PropsRuntime<'conversation.composer.dock'> & InjectFace<SpokenInjected>
 
 const EMPTY_REQUESTS: readonly RequestView[] = []
@@ -61,8 +63,9 @@ function Waveform({ peaks, preparing, playing }: { peaks: readonly number[]; pre
   )
 }
 
-export function SpokenSummaryTail({ controller, spoken, scope, getLocale, seq, useSession, t }: TailProps): ReactNode {
+export function SpokenSummaryTail({ controller, spoken, scope, getLocale, messageId, useSession, t }: TailProps): ReactNode {
   const nodes = useSession(snapshot => snapshot.nodes)
+  const turnEnds = useSession(snapshot => snapshot.turnEnds)
   const requests = useSession(snapshot => {
     const views = snapshot.views as unknown as { get?: (target: string) => unknown } | undefined
     if (views?.get === undefined) return EMPTY_REQUESTS
@@ -73,9 +76,8 @@ export function SpokenSummaryTail({ controller, spoken, scope, getLocale, seq, u
   const scopeState = useSyncExternalStore(listener => scope.subscribe(listener), () => scope.getSnapshot())
   const spokenState = useSyncExternalStore(spoken.subscribe, spoken.getSnapshot)
   const locale = getLocale()
-  const sources = useMemo(() => spokenSources(nodes, locale, requests), [nodes, locale, requests])
-  const closing = nodes.find(node => node.kind === 'assistant' && node.seq === seq)
-  const id = closing?.kind === 'assistant' && closing.messageId !== undefined ? String(closing.messageId) : `turn-tail:${String(seq)}`
+  const sources = useMemo(() => spokenSources(nodes, locale, turnEnds, requests), [nodes, locale, requests, turnEnds])
+  const id = String(messageId)
   const source = sources.find(candidate => candidate.messageId === id)
   const settings = useMemo(
     () => preparationSettings(controller, scopeState.value, locale),
@@ -86,7 +88,7 @@ export function SpokenSummaryTail({ controller, spoken, scope, getLocale, seq, u
   const latestSourceMessageId = sources.at(-1)?.messageId
   // Before this reveal flag existed, an explicitly saved autoplay value was
   // the only durable evidence that the inline control had already been used.
-  const legacyAutoplayWasUsed = (scopeState.user as Partial<SpeechUserSettings>).autoPlay !== undefined
+  const legacyAutoplayWasUsed = (scopeState.user as Partial<SpeechUserSettings> | undefined)?.autoPlay !== undefined
   const autoplayInlineRevealed = scopeState.value?.autoplayInlineRevealed === true || legacyAutoplayWasUsed
   const autoplayHostMessageId = latestAudioMessageId ?? (autoplayInlineRevealed ? latestSourceMessageId : undefined)
 
@@ -169,11 +171,13 @@ export function SpokenSummaryTail({ controller, spoken, scope, getLocale, seq, u
   )
 }
 
-export function SpokenSessionObserver({ controller, spoken, scope, getLocale, sessionId, useSession }: ObserverProps): ReactNode {
+export function SpokenSessionObserver({ controller, spoken, scope, getLocale, sidebarPlayback, sessionId, useSession }: ObserverProps): ReactNode {
   const state = useSyncExternalStore(listener => scope.subscribe(listener), () => scope.getSnapshot())
   const client = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
+  const openState = useSession(snapshot => snapshot.openState)
   const pending = useSession(snapshot => snapshot.pending)
   const nodes = useSession(snapshot => snapshot.nodes)
+  const turnEnds = useSession(snapshot => snapshot.turnEnds)
   const requests = useSession(snapshot => {
     const views = snapshot.views as unknown as { get?: (target: string) => unknown } | undefined
     if (views?.get === undefined) return EMPTY_REQUESTS
@@ -182,16 +186,17 @@ export function SpokenSessionObserver({ controller, spoken, scope, getLocale, se
   })
   const speechLocale = state.value?.language === undefined || state.value.language === 'auto' ? getLocale() : state.value.language
   const settings = useMemo(() => preparationSettings(controller, state.value, speechLocale), [client.catalog, controller, speechLocale, state.value])
-  const sources = useMemo(() => spokenSources(nodes, speechLocale, requests), [nodes, requests, speechLocale])
+  const sources = useMemo(() => spokenSources(nodes, speechLocale, turnEnds, requests), [nodes, requests, speechLocale, turnEnds])
   useEffect(() => { void controller.ensureMetadata() }, [controller])
+  useEffect(() => { sidebarPlayback.observeCurrentSession(String(sessionId)) }, [sessionId, sidebarPlayback])
   useEffect(() => { spoken.setEnabled(settings.ttsEnabled) }, [settings.ttsEnabled, spoken])
   useEffect(() => {
-    if (client.catalog === undefined) return
+    if (client.catalog === undefined || openState !== 'open') return
     spoken.observeSession(String(sessionId), sources, settings)
-  }, [client.catalog, sessionId, settings, sources, spoken])
+  }, [client.catalog, openState, sessionId, settings, sources, spoken])
   useEffect(() => {
-    if (client.catalog === undefined) return
+    if (client.catalog === undefined || openState !== 'open') return
     spoken.observeInteractions(String(sessionId), pending.map(item => item.key), speechLocale, settings)
-  }, [client.catalog, pending, sessionId, settings, speechLocale, spoken])
+  }, [client.catalog, openState, pending, sessionId, settings, speechLocale, spoken])
   return null
 }
