@@ -10,7 +10,9 @@ Talk to your coding agent, see your words appear in real time, and hear a concis
 
 ## Demo
 
-<!-- Paste the GitHub-hosted demo video here. -->
+
+https://github.com/user-attachments/assets/a727afab-777d-487d-a145-175f5e570eca
+
 
 ## Install
 
