@@ -1,4 +1,5 @@
 node_modules/
+/media/*.mp4
 lib/
 coverage/
 *.tgz
