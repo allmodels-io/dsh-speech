@@ -1,4 +1,4 @@
-import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionIdOf as SessionId } from '@deepseek-ai/dsh-client-ui-slots'
 import { AudioCapture, type MicrophoneDevice } from './audio.ts'
 import { speechApi } from './api.ts'
 import { readPreferredMicrophone, writePreferredMicrophone } from './microphonePreference.ts'
@@ -48,6 +48,8 @@ interface ActiveRecording extends StartOptions {
   capture: AudioCapture
   transcript: TranscriptAccumulator
   finished: boolean
+  captureReady: boolean
+  desiredMicrophoneId: string
   stoppingCapture?: Promise<void>
   finalTimer?: ReturnType<typeof setTimeout>
   deviceChangeHandler?: (() => void) | undefined
@@ -155,8 +157,14 @@ export class SpeechController {
 
   async switchMicrophone(deviceId: string): Promise<void> {
     const active = this.active
-    if (active === undefined || active.finished || this.snapshot.phase !== 'recording') return
+    if (active === undefined || active.finished
+      || (this.snapshot.phase !== 'starting' && this.snapshot.phase !== 'recording')) return
     const previousDeviceId = this.snapshot.activeMicrophoneId
+    active.desiredMicrophoneId = deviceId
+    if (!active.captureReady) {
+      this.publish({ activeMicrophoneId: deviceId, switchingMicrophone: false, microphoneError: undefined })
+      return
+    }
     this.publish({ activeMicrophoneId: deviceId, switchingMicrophone: true, microphoneError: undefined })
     try {
       const microphones = await active.capture.switchMicrophone(deviceId)
@@ -170,6 +178,7 @@ export class SpeechController {
       writePreferredMicrophone(this.preferredMicrophoneId)
     } catch (error) {
       if (this.active !== active || active.finished) return
+      active.desiredMicrophoneId = previousDeviceId ?? ''
       this.publish({
         activeMicrophoneId: previousDeviceId,
         switchingMicrophone: false,
@@ -198,6 +207,8 @@ export class SpeechController {
       capture,
       transcript: createTranscript(options.draft),
       finished: false,
+      captureReady: false,
+      desiredMicrophoneId: this.preferredMicrophoneId,
     }
     this.active = active
     this.blocks?.set(options.sessionId, { reason: options.listeningReason })
@@ -206,6 +217,7 @@ export class SpeechController {
       activeModel: undefined, activeProvider: undefined, microphones: [], activeMicrophoneId: undefined,
       switchingMicrophone: false, microphoneError: undefined, hasTranscript: false,
     })
+    void this.refreshMicrophones(active)
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -244,14 +256,32 @@ export class SpeechController {
         socket.addEventListener('close', () => { fail('The speech connection closed before it was ready') }, { once: true })
       })
       this.bindSocket(active)
+      const requestedMicrophoneId = active.desiredMicrophoneId
       await capture.start(
         frame => { if (socket.readyState === WebSocket.OPEN && this.active === active) socket.send(frame) },
         amplitude => { if (this.active === active) this.publish({ amplitude: Math.min(1, amplitude * 4) }) },
-        this.preferredMicrophoneId,
+        requestedMicrophoneId,
       )
       if (this.active !== active) return
-      this.publish({ phase: 'recording' })
-      void this.refreshMicrophones(active)
+      let microphones = await capture.microphones()
+      let appliedMicrophoneId = microphones.activeDeviceId ?? ''
+      if (active.desiredMicrophoneId === requestedMicrophoneId && appliedMicrophoneId !== requestedMicrophoneId) {
+        active.desiredMicrophoneId = appliedMicrophoneId
+      }
+      while (this.active === active && !active.finished && active.desiredMicrophoneId !== appliedMicrophoneId) {
+        microphones = await capture.switchMicrophone(active.desiredMicrophoneId)
+        appliedMicrophoneId = microphones.activeDeviceId ?? ''
+      }
+      if (this.active !== active || active.finished) return
+      active.captureReady = true
+      this.preferredMicrophoneId = appliedMicrophoneId
+      writePreferredMicrophone(appliedMicrophoneId)
+      this.publish({
+        phase: 'recording',
+        microphones: microphones.devices,
+        activeMicrophoneId: appliedMicrophoneId,
+        switchingMicrophone: false,
+      })
       if (typeof navigator.mediaDevices?.addEventListener === 'function') {
         active.deviceChangeHandler = () => { void this.refreshMicrophones(active) }
         navigator.mediaDevices.addEventListener('devicechange', active.deviceChangeHandler)
@@ -342,8 +372,9 @@ export class SpeechController {
       if (this.active !== active || active.finished) return
       this.publish({
         microphones: microphones.devices,
-        activeMicrophoneId: microphones.activeDeviceId,
+        activeMicrophoneId: active.captureReady ? microphones.activeDeviceId : active.desiredMicrophoneId,
       })
+      if (!active.captureReady) return
       const activeDeviceId = microphones.activeDeviceId ?? ''
       if (activeDeviceId !== this.preferredMicrophoneId) {
         this.preferredMicrophoneId = activeDeviceId

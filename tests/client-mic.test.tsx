@@ -39,11 +39,12 @@ function renderMic(inputSnapshot: SnapshotInput) {
     reportError,
   } as unknown as SpeechController
   const inputActions = { setDraft: vi.fn(), addImages: vi.fn(), removeImage: vi.fn(), pruneImages: vi.fn(), submit: vi.fn() }
+  const input = { draft: 'Existing draft', phase: 'plain' }
   const props = {
     controller,
     getLocale: () => 'en',
     sessionId: 'session-1',
-    input: { draft: 'Existing draft', phase: 'plain' },
+    useInput: (selector: (snapshot: typeof input) => unknown) => selector(input),
     inputActions,
     t,
     useSession: vi.fn(), useProjection: vi.fn(), useSessions: vi.fn(), useWorkspaces: vi.fn(),
@@ -205,6 +206,7 @@ describe('composer microphone', () => {
 
     expect(view.container.querySelector('.dsh-speech-recording-canvas')).toBeNull()
     expect(view.container.querySelector('[data-phase="starting"]')).toBeTruthy()
+    expect(view.container.querySelectorAll('.dsh-speech-recording-pending i')).toHaveLength(3)
     expect(view.getAllByRole('status').some(node => node.textContent === en.starting)).toBe(true)
     expect(view.queryByRole('button', { name: en.micStop })).toBeNull()
   })
@@ -226,9 +228,9 @@ describe('composer microphone', () => {
     expect(view.queryByRole('button', { name: en.micStop })).toBeNull()
   })
 
-  it('shows the microphone selector only during recording and switches the active capture', () => {
+  it.each(['starting', 'recording'] as const)('shows the microphone selector while %s and switches the selected capture', phase => {
     const view = renderDock({
-      phase: 'recording',
+      phase,
       activeSessionId: 'session-1' as never,
       amplitude: 0.2,
       metadataLoading: false,
@@ -272,7 +274,7 @@ describe('composer microphone', () => {
 
   it('shows the hero-sized microphone selector beside the mode control on a new chat', () => {
     const view = renderInputDock({
-      phase: 'recording',
+      phase: 'starting',
       activeSessionId: 'session-1' as never,
       amplitude: 0.2,
       metadataLoading: false,

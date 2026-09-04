@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { composerInput, connectMockCredential, loadHarness, microphoneButton, waitForPartial } from './helpers.ts'
+import { composerInput, connectMockCredential, expectComposerText, loadHarness, microphoneButton, waitForPartial } from './helpers.ts'
 
 test('mobile recording fits the composer and omits the microphone selector', async ({ page }) => {
   await loadHarness(page)
@@ -22,6 +22,6 @@ test('mobile recording fits the composer and omits the microphone selector', asy
   await expect(send).toBeEnabled()
 
   await page.getByRole('button', { name: 'Cancel voice input' }).click()
-  await expect(input).toHaveValue('Mobile draft')
+  await expectComposerText(input, 'Mobile draft')
   await expect(input).toBeEditable()
 })

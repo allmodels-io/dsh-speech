@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { speechApi } from '../src/client/api.ts'
-import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { interactionCue, SpokenSummaryController, spokenSources, type SpokenMessageSource, type SpokenPreparationSettings } from '../src/client/spoken-controller.ts'
 import type { SummaryCache } from '../src/client/summary-cache.ts'
 

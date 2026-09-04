@@ -3,7 +3,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 export const MOCK_API_KEY = 'mock-api-key-123'
 
 export function composerInput(page: Page): Locator {
-  return page.locator('[data-slot="conversation.composer"] textarea')
+  return page.locator('[data-slot="conversation.composer"]').getByRole('textbox')
 }
 
 export function microphoneButton(page: Page): Locator {
@@ -35,7 +35,7 @@ export async function loadHarness(page: Page): Promise<void> {
       console.log(`browser ${message.type()}: ${message.text()}`)
     }
   })
-  await page.goto('/')
+  await page.goto(process.env.DSH_SPEECH_E2E_AUTH_URL ?? '/')
   await dismissHarnessFirstRun(page)
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const continueButton = page.getByRole('button', { name: 'Continue', exact: true })
@@ -118,7 +118,14 @@ export async function connectMockCredential(page: Page): Promise<void> {
 }
 
 export async function waitForPartial(page: Page, expected: string): Promise<void> {
-  await expect(composerInput(page)).toHaveValue(expected, { timeout: 15_000 })
+  await expectComposerText(composerInput(page), expected, 15_000)
+}
+
+export async function expectComposerText(input: Locator, expected: string, timeout = 10_000): Promise<void> {
+  await expect.poll(async () => input.evaluate(element => {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) return element.value
+    return element.textContent ?? ''
+  }), { timeout }).toBe(expected)
 }
 
 export function expectBoxesDoNotOverlap(left: { x: number; y: number; width: number; height: number }, right: { x: number; y: number; width: number; height: number }): void {

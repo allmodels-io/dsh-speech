@@ -44,6 +44,7 @@ export const styles = {
   recordingStop: 'dsh-speech-recording-stop',
   recordingSend: 'dsh-speech-recording-send',
   recordingProgress: 'dsh-speech-recording-progress',
+  recordingPending: 'dsh-speech-recording-pending',
   deviceDock: 'dsh-speech-device-dock',
   deviceMarker: 'dsh-speech-device-marker',
   deviceFallback: 'dsh-speech-device-fallback',
@@ -102,6 +103,8 @@ export const STYLE_TEXT = String.raw`
 .dsh-speech-dock,.dsh-speech-dock-error{min-height:22px;display:flex;align-items:center;gap:9px;padding:4px 8px 0;font-size:12px}.dsh-speech-dock-detail{color:var(--color-text-secondary,#8d8d8d)}
 .dsh-speech-summary-player{width:100%}.dsh-speech-summary-player>.dsh-speech-autoplay-toggle{margin-left:auto}
 :where(div):has(>[data-slot="conversation.chat.assistant-actions"]>.dsh-speech-summary-player){height:auto;flex-wrap:wrap;row-gap:4px}[data-slot="conversation.chat.assistant-actions"]>.dsh-speech-summary-player{order:-1;flex:0 0 100%;margin-bottom:4px}
+.dsh-speech-recording-pending{width:23px;height:14px;display:inline-flex;align-items:center;justify-content:center;gap:3px}.dsh-speech-recording-pending i{width:3px;height:3px;display:block;border:0;border-radius:999px;background:currentColor;opacity:.3;animation:dsh-speech-pending 1s ease-in-out infinite}.dsh-speech-recording-pending i:nth-child(2){animation-delay:.14s}.dsh-speech-recording-pending i:nth-child(3){animation-delay:.28s}@keyframes dsh-speech-pending{0%,60%,100%{opacity:.28;transform:translateY(0)}30%{opacity:.9;transform:translateY(-3px)}}
 @media(max-width:680px){.dsh-speech-columns,.dsh-speech-grid,.dsh-speech-balance-grid{grid-template-columns:1fr}.dsh-speech-header{align-items:flex-start}.dsh-speech-device-separator,.dsh-speech-device-dock{display:none}}
 @media(prefers-reduced-motion:reduce){.dsh-speech-mic-tooltip{transition:none}.dsh-speech-recording-progress i{animation:none;border-right-color:currentColor}.dsh-speech-summary-waveform i{transition:none}.dsh-speech-summary-waveform[data-preparing="true"] i,.dsh-speech-sidebar-playing{animation:none}}
+@media(prefers-reduced-motion:reduce){.dsh-speech-recording-pending i{animation:none}.dsh-speech-recording-pending i:nth-child(2){opacity:.65}}
 `

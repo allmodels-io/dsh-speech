@@ -1,7 +1,11 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-ui-trajectory/client'
 import { SpeechController } from './controller.ts'
 import { SpeechDock, SpeechInputDock, SpeechMic } from './SpeechComposer.tsx'
 import { SpeechSettings } from './SpeechSettings.tsx'
@@ -15,7 +19,7 @@ import type { SpeechUserSettings } from '../shared.ts'
 
 export const inject = ['slots', 'locale', 'settingsScope']
 
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: Context): void {
   const controller = new SpeechController()
   const summaryCache = new SummaryCache()
   const spoken = new SpokenSummaryController(undefined, summaryCache)

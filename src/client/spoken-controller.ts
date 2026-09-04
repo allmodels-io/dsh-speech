@@ -1,4 +1,4 @@
-import type { ConversationNode, RequestView } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationNode, RequestView } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   MAX_SUMMARY_ANSWER_CHARACTERS,
   MAX_SUMMARY_REQUEST_CHARACTERS,

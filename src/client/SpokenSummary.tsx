@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
-import type { RequestView, SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { preferredTtsSelection } from '../shared.ts'
 import type { SpeechUserSettings } from '../shared.ts'
@@ -19,8 +19,6 @@ export interface SpokenInjected {
 
 type TailProps = PropsRuntime<'conversation.chat.assistant-actions'> & PropsLocale<'speech'> & InjectFace<SpokenInjected>
 type ObserverProps = PropsRuntime<'conversation.composer.dock'> & InjectFace<SpokenInjected>
-
-const EMPTY_REQUESTS: readonly RequestView[] = []
 
 function preparationSettings(controller: SpeechController, settings: SpeechUserSettings | undefined, locale: string): SpokenPreparationSettings {
   const fallback = preferredTtsSelection(locale)
@@ -63,15 +61,10 @@ function Waveform({ peaks, preparing, playing }: { peaks: readonly number[]; pre
   )
 }
 
-export function SpokenSummaryTail({ controller, spoken, scope, getLocale, messageId, useSession, t }: TailProps): ReactNode {
-  const nodes = useSession(snapshot => snapshot.nodes)
-  const turnEnds = useSession(snapshot => snapshot.turnEnds)
-  const requests = useSession(snapshot => {
-    const views = snapshot.views as unknown as { get?: (target: string) => unknown } | undefined
-    if (views?.get === undefined) return EMPTY_REQUESTS
-    const trajectory = views.get('trajectory') as { requests?: readonly RequestView[] } | undefined
-    return trajectory?.requests ?? EMPTY_REQUESTS
-  })
+export function SpokenSummaryTail({ controller, spoken, scope, getLocale, messageId, useChat, useTrajectory, t }: TailProps): ReactNode {
+  const nodes = useChat(snapshot => snapshot.legacy.nodes)
+  const turnEnds = useChat(snapshot => snapshot.legacy.turnEnds)
+  const requests = useTrajectory(snapshot => snapshot.requests)
   const client = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const scopeState = useSyncExternalStore(listener => scope.subscribe(listener), () => scope.getSnapshot())
   const spokenState = useSyncExternalStore(spoken.subscribe, spoken.getSnapshot)
@@ -171,19 +164,14 @@ export function SpokenSummaryTail({ controller, spoken, scope, getLocale, messag
   )
 }
 
-export function SpokenSessionObserver({ controller, spoken, scope, getLocale, sidebarPlayback, sessionId, useSession }: ObserverProps): ReactNode {
+export function SpokenSessionObserver({ controller, spoken, scope, getLocale, sidebarPlayback, sessionId, useSession, useSessionPendingInteraction, useChat, useTrajectory }: ObserverProps): ReactNode {
   const state = useSyncExternalStore(listener => scope.subscribe(listener), () => scope.getSnapshot())
   const client = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const openState = useSession(snapshot => snapshot.openState)
-  const pending = useSession(snapshot => snapshot.pending)
-  const nodes = useSession(snapshot => snapshot.nodes)
-  const turnEnds = useSession(snapshot => snapshot.turnEnds)
-  const requests = useSession(snapshot => {
-    const views = snapshot.views as unknown as { get?: (target: string) => unknown } | undefined
-    if (views?.get === undefined) return EMPTY_REQUESTS
-    const trajectory = views.get('trajectory') as { requests?: readonly RequestView[] } | undefined
-    return trajectory?.requests ?? EMPTY_REQUESTS
-  })
+  const pendingInteraction = useSessionPendingInteraction(snapshot => snapshot.get(sessionId))
+  const nodes = useChat(snapshot => snapshot.legacy.nodes)
+  const turnEnds = useChat(snapshot => snapshot.legacy.turnEnds)
+  const requests = useTrajectory(snapshot => snapshot.requests)
   const speechLocale = state.value?.language === undefined || state.value.language === 'auto' ? getLocale() : state.value.language
   const settings = useMemo(() => preparationSettings(controller, state.value, speechLocale), [client.catalog, controller, speechLocale, state.value])
   const sources = useMemo(() => spokenSources(nodes, speechLocale, turnEnds, requests), [nodes, requests, speechLocale, turnEnds])
@@ -196,7 +184,7 @@ export function SpokenSessionObserver({ controller, spoken, scope, getLocale, si
   }, [client.catalog, openState, sessionId, settings, sources, spoken])
   useEffect(() => {
     if (client.catalog === undefined || openState !== 'open') return
-    spoken.observeInteractions(String(sessionId), pending.map(item => item.key), speechLocale, settings)
-  }, [client.catalog, openState, pending, sessionId, settings, speechLocale, spoken])
+    spoken.observeInteractions(String(sessionId), pendingInteraction === undefined ? [] : [pendingInteraction.key], speechLocale, settings)
+  }, [client.catalog, openState, pendingInteraction, sessionId, settings, speechLocale, spoken])
   return null
 }

@@ -27,6 +27,10 @@ test('real AllModels and DeepSeek credentials support a trusted main-branch smok
   await page.getByRole('button', { name: 'Send message' }).click()
   await expect(page.locator('[data-slot="conversation.session"]')).toContainText(/\bOK\b/u, { timeout: 90_000 })
 
+  await expect(page.getByRole('button', { name: 'Spoken summary unavailable for this answer' })).toHaveCount(0)
+  await expect(page.locator('.dsh-speech-summary-player').last()).toHaveAttribute('data-phase', /^(?:ready|playing)$/u, { timeout: 90_000 })
+  await expect(page.getByRole('button', { name: /^(?:Pause|Play|Replay|Resume) summary$/u }).last()).toBeEnabled()
+
   await microphoneButton(page).click()
   await expect(page.locator('.dsh-speech-recording-canvas')).toBeVisible({ timeout: 30_000 })
   const metrics = page.locator('[data-slot="conversation.composer.dock"] > *').filter({ hasText: 'TTFT' }).first()

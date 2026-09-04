@@ -9,6 +9,45 @@ afterEach(() => {
 })
 
 describe('recording stop latency', () => {
+  it('accepts a microphone choice while capture is still preparing', async () => {
+    const switchMicrophone = vi.fn()
+    const controller = new SpeechController()
+    const active = {
+      sessionId: 'session-1',
+      draft: '',
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      locale: 'en',
+      listeningReason: 'Listening',
+      socket: {},
+      capture: { switchMicrophone },
+      transcript: createTranscript(''),
+      finished: false,
+      captureReady: false,
+      desiredMicrophoneId: '',
+    }
+    ;(controller as unknown as { active: typeof active }).active = active
+    ;(controller as unknown as { snapshot: Record<string, unknown> }).snapshot = {
+      ...controller.getSnapshot(),
+      phase: 'starting',
+      activeSessionId: 'session-1',
+      microphones: [
+        { deviceId: '', label: 'System default', systemDefault: true },
+        { deviceId: 'usb', label: 'USB Microphone' },
+      ],
+      activeMicrophoneId: '',
+    }
+
+    await controller.switchMicrophone('usb')
+
+    expect(active.desiredMicrophoneId).toBe('usb')
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'starting',
+      activeMicrophoneId: 'usb',
+      switchingMicrophone: false,
+    })
+    expect(switchMicrophone).not.toHaveBeenCalled()
+  })
+
   it('commits and closes the STT stream before audio-context shutdown finishes', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('WebSocket', { OPEN: 1, CLOSING: 2 })

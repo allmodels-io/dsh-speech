@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import {
   composerInput,
   connectMockCredential,
+  expectComposerText,
   expectBoxesDoNotOverlap,
   loadHarness,
   microphoneButton,
@@ -30,7 +31,11 @@ test('virtual microphone streams, commits, unlocks, and never auto-sends', async
   await microphoneButton(page).click()
 
   await expect(page.locator('.dsh-speech-recording-progress')).toHaveText('Preparing microphone…')
+  await expect(page.locator('.dsh-speech-recording-pending i')).toHaveCount(3)
   await expect(page.locator('.dsh-speech-recording-canvas')).toHaveCount(0)
+  const preparingSelector = page.locator('.dsh-speech-device-dock[data-variant="hero"]')
+  await expect(preparingSelector).toBeVisible()
+  await expect(preparingSelector.getByRole('button', { name: /^Microphone:/u })).toBeEnabled()
 
   const canvas = page.locator('.dsh-speech-recording-canvas')
   await expect(canvas).toBeVisible({ timeout: 15_000 })
@@ -101,7 +106,7 @@ test('virtual microphone streams, commits, unlocks, and never auto-sends', async
   await expect(page.locator('.dsh-speech-recording-progress')).toHaveText('Finishing transcription…')
   await expect(microphoneButton(page)).toHaveAccessibleName('Start voice input', { timeout: 10_000 })
   await expect(input).toBeEditable()
-  await expect(input).toHaveValue('Existing draft hello world')
+  await expectComposerText(input, 'Existing draft hello world')
   await expect(page.locator('[data-slot="conversation.session"]')).toBeEmpty()
 })
 
@@ -119,7 +124,7 @@ test('recording Send finalizes the transcript and submits it once', async ({ pag
   await expect(microphoneButton(page)).toHaveAccessibleName('Start voice input', { timeout: 10_000 })
   const session = page.locator('[data-slot="conversation.session"]')
   await expect(session.getByText('Voice draft hello world', { exact: true })).toHaveCount(1)
-  await expect(input).toHaveValue('')
+  await expectComposerText(input, '')
 })
 
 test('Cancel discards every active transcription change and restores the original draft', async ({ page }) => {
@@ -132,6 +137,6 @@ test('Cancel discards every active transcription change and restores the origina
 
   await expect(microphoneButton(page)).toHaveAccessibleName('Start voice input')
   await expect(input).toBeEditable()
-  await expect(input).toHaveValue('Keep this exact draft')
+  await expectComposerText(input, 'Keep this exact draft')
   await expect(page.locator('.dsh-speech-recording-takeover')).toHaveCount(0)
 })

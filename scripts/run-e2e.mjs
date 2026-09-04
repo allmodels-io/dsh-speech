@@ -141,24 +141,56 @@ function start(command, args, options = {}) {
     env: childEnvironment({ ...options, label: command }),
   })
   children.push(child)
-  if (options.quiet === true) {
+  if (typeof options.onStdout === 'function') {
+    child.stdout.on('data', chunk => { options.onStdout(chunk.toString()) })
+  } else if (options.quiet === true) {
     child.stdout.resume()
-    child.stderr.resume()
   } else {
     child.stdout.on('data', chunk => { process.stdout.write(chunk) })
+  }
+  if (options.quiet === true) {
+    child.stderr.resume()
+  } else {
     child.stderr.on('data', chunk => { process.stderr.write(chunk) })
   }
   return child
 }
 
-async function waitFor(url, child, label) {
+function captureDshUrl() {
+  let buffer = ''
+  let settled = false
+  let resolveUrl
+  let rejectUrl
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolveUrl = resolvePromise
+    rejectUrl = rejectPromise
+  })
+  return {
+    promise,
+    push(chunk) {
+      if (settled) return
+      buffer = `${buffer}${chunk}`.slice(-8_192)
+      const match = buffer.match(/dsh web:\s+(https?:\/\/[^\s]+)/u)
+      if (match?.[1] === undefined) return
+      settled = true
+      resolveUrl(match[1])
+    },
+    fail(error) {
+      if (settled) return
+      settled = true
+      rejectUrl(error)
+    },
+  }
+}
+
+async function waitFor(url, child, label, accepts = response => response.ok) {
   const deadline = Date.now() + 30_000
   let lastError
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`${label} exited with code ${child.exitCode}`)
     try {
       const response = await fetch(url)
-      if (response.ok) return
+      if (accepts(response)) return
     } catch (error) { lastError = error }
     await new Promise(resolvePromise => { setTimeout(resolvePromise, 200) })
   }
@@ -219,6 +251,7 @@ async function main() {
     ...(mode === 'mock' ? ['--patch', patchFile] : []),
     '--port', String(harnessPort), '--no-open',
   ]
+  const announcement = captureDshUrl()
   const harness = start('pnpm', dshArgs, {
     env: {
       DSH_HOME: dshHome,
@@ -227,14 +260,21 @@ async function main() {
     allowSecrets: true,
     secrets: mode === 'mock' ? { DEEPSEEK_API_KEY: 'mock-deepseek-key' } : liveSecrets,
     quiet: mode === 'live',
+    onStdout: chunk => { announcement.push(chunk) },
     unsetEnv: mode === 'mock' ? ['ALLMODELS_API_KEY'] : [],
   })
-  await waitFor(baseURL, harness, 'DeepSeek Harness')
+  harness.once('exit', code => { announcement.fail(new Error(`DeepSeek Harness exited with code ${String(code)}`)) })
+  const [, authenticatedUrl] = await Promise.all([
+    waitFor(baseURL, harness, 'DeepSeek Harness', response => response.ok || response.status === 401),
+    announcement.promise,
+  ])
+  console.log('dsh web: authenticated test URL captured')
 
   run('pnpm', ['exec', 'playwright', 'test', ...(process.env.DSH_SPEECH_E2E_TEST_ARGS?.split(/\s+/).filter(Boolean) ?? [])], {
     env: {
       DSH_SPEECH_E2E_MODE: mode,
       DSH_SPEECH_E2E_BASE_URL: baseURL,
+      DSH_SPEECH_E2E_AUTH_URL: authenticatedUrl,
       DSH_SPEECH_E2E_AUDIO_FILE: audioFile,
       CI: process.env.CI ?? 'false',
     },

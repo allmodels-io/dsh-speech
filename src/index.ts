@@ -5,7 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import { AllModelsClient, AllModelsError } from './allmodels.ts'
 import { isTrustedRequest } from './security.ts'
 import {
@@ -23,7 +23,7 @@ import { summarizeAnswer, validateSummarizeRequest } from './summarizer.ts'
 
 export const name = PLUGIN_NAME
 export const inject = ['webServer', 'credentials', 'llm']
-export const SPEECH_SETTINGS_NS = settingsNamespace(SETTINGS_NAMESPACE)
+export const SPEECH_SETTINGS_NS = SETTINGS_NAMESPACE
 
 export type Config = SpeechSettings
 
@@ -166,11 +166,11 @@ export function apply(ctx: Context, config: Config): void {
   }
   let userSettingsSource = (): SpeechUserSettings => entrySettings
   const settingsSource = (): SpeechSettings => ({ ...config, ...userSettingsSource() })
-  installSettingsSection(ctx, SPEECH_SETTINGS_NS, UserSettingsConfig, entrySettings, {
-    setSource: source => { userSettingsSource = source },
+  ctx.inject(['settings'], scoped => scoped.settings.installSection(ctx, SPEECH_SETTINGS_NS, UserSettingsConfig, entrySettings, {
+    setSource: (source: () => SpeechUserSettings) => { userSettingsSource = source },
     onChange: () => { handleSettingsChange() },
-    validate: value => { validateSettings({ baseURL: config.baseURL, ...value }) },
-  })
+    validate: (value: SpeechUserSettings) => { validateSettings({ baseURL: config.baseURL, ...value }) },
+  }))
 
   const allModels = new AllModelsClient()
   const pendingSpeech = new Set<AbortController>()

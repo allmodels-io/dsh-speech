@@ -159,7 +159,7 @@ function RecordingTakeover({ amplitude, cancelLabel, disabled, phase, label, onC
       <div className={styles.recordingTrack}>
         {recording ? <RecordingWaveform amplitude={amplitude} /> : (
           <span className={styles.recordingProgress} role="status" aria-live="polite">
-            <i aria-hidden="true" />
+            <span className={styles.recordingPending} aria-hidden="true"><i /><i /><i /></span>
             {label}
           </span>
         )}
@@ -193,8 +193,9 @@ function RecordingTakeover({ amplitude, cancelLabel, disabled, phase, label, onC
   )
 }
 
-export function SpeechMic({ controller, getLocale, sessionId, input, inputActions, t }: MicProps): ReactNode {
+export function SpeechMic({ controller, getLocale, sessionId, useInput, inputActions, t }: MicProps): ReactNode {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
+  const input = useInput(snapshot => snapshot)
   const tooltipId = useId()
   const [explanationOpen, setExplanationOpen] = useState(false)
   const explanationTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -476,7 +477,7 @@ function MicrophoneInputDock({ controller, state, t }: {
 
 export function SpeechDock({ controller, sessionId, t }: DockProps): ReactNode {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
-  if (state.activeSessionId === sessionId && state.phase === 'recording') {
+  if (state.activeSessionId === sessionId && (state.phase === 'starting' || state.phase === 'recording')) {
     return <MicrophoneDockPortal controller={controller} state={state} t={t} />
   }
   if (state.activeSessionId === sessionId || state.error === undefined) return null
@@ -485,6 +486,6 @@ export function SpeechDock({ controller, sessionId, t }: DockProps): ReactNode {
 
 export function SpeechInputDock({ controller, sessionId, t }: InputDockProps): ReactNode {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
-  if (state.activeSessionId !== sessionId || state.phase !== 'recording') return null
+  if (state.activeSessionId !== sessionId || (state.phase !== 'starting' && state.phase !== 'recording')) return null
   return <MicrophoneInputDock controller={controller} state={state} t={t} />
 }

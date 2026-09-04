@@ -63,7 +63,9 @@ function renderAction(state: SpokenMessageState, autoplayInlineRevealed = false,
   ]
   const props = {
     controller, spoken, scope: settings.value, getLocale: () => 'en', t,
-    messageId: 'message', sessionId: 'session', useSession: (selector: (snapshot: unknown) => unknown) => selector({ nodes, turnEnds: new Map([[1, 3]]) }),
+    messageId: 'message', sessionId: 'session',
+    useChat: (selector: (snapshot: unknown) => unknown) => selector({ legacy: { nodes, turnEnds: new Map([[1, 3]]) } }),
+    useTrajectory: (selector: (snapshot: unknown) => unknown) => selector({ requests: [] }),
   } as unknown as ComponentProps<typeof SpokenSummaryTail>
   const view = render(<SpokenSummaryTail {...props} />)
   return { spoken, settings, ...view }
@@ -87,26 +89,27 @@ describe('spoken-summary UI', () => {
     } as unknown as SpokenSummaryController
     const sidebarPlayback = { observeCurrentSession: vi.fn() }
     const settings = scope()
-    const snapshot = {
+    const sessionSnapshot = {
       openState: 'loading',
-      pending: [{ key: 'old-question' }],
-      nodes: [
+    }
+    const nodes = [
         { kind: 'user', seq: 1, content: [{ type: 'text', text: 'Old request' }] },
         { kind: 'assistant', seq: 2, turn: 1, messageId: 'old-answer', blocks: [{ kind: 'text', text: 'Old answer' }], provenance: { provider: 'p', model: 'm' } },
-      ],
-      turnEnds: new Map([[1, 3]]),
-      views: new Map(),
-    }
+      ]
+    const pendingInteractions = new Map([['session', { key: 'old-question' }]])
     const props = {
       controller, spoken, scope: settings.value, getLocale: () => 'en', sidebarPlayback,
       sessionId: 'session',
-      useSession: (selector: (value: typeof snapshot) => unknown) => selector(snapshot),
+      useSession: (selector: (value: typeof sessionSnapshot) => unknown) => selector(sessionSnapshot),
+      useSessionPendingInteraction: (selector: (value: typeof pendingInteractions) => unknown) => selector(pendingInteractions),
+      useChat: (selector: (value: unknown) => unknown) => selector({ legacy: { nodes, turnEnds: new Map([[1, 3]]) } }),
+      useTrajectory: (selector: (value: unknown) => unknown) => selector({ requests: [] }),
     } as unknown as ComponentProps<typeof SpokenSessionObserver>
     const view = render(<SpokenSessionObserver {...props} />)
     expect(spoken.observeSession).not.toHaveBeenCalled()
     expect(spoken.observeInteractions).not.toHaveBeenCalled()
 
-    snapshot.openState = 'open'
+    sessionSnapshot.openState = 'open'
     view.rerender(<SpokenSessionObserver {...props} />)
     expect(spoken.observeSession).toHaveBeenCalledOnce()
     expect(spoken.observeInteractions).toHaveBeenCalledOnce()
