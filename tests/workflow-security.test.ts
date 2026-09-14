@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest'
 const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
 const release = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
 const compatibility = readFileSync(new URL('../.github/workflows/harness-compatibility.yml', import.meta.url), 'utf8')
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+  packageManager?: string
+}
 
 describe('GitHub Actions credential boundary', () => {
   it('injects live API keys only into the single live runner step', () => {
@@ -18,6 +21,13 @@ describe('GitHub Actions credential boundary', () => {
     const uses = [...`${ci}\n${release}\n${compatibility}`.matchAll(/uses:\s+[^@\s]+@([^\s#]+)/gu)]
     expect(uses.length).toBeGreaterThan(0)
     for (const match of uses) expect(match[1]).toMatch(/^[a-f0-9]{40}$/u)
+  })
+
+  it('pins the pnpm release that correctly resolves Harness prerelease peer packages', () => {
+    expect(packageJson.packageManager).toBe('pnpm@12.4.1')
+    expect(`${ci}\n${release}\n${compatibility}`).not.toMatch(
+      /pnpm\/action-setup@[^\n]+\n\s+with:\s*\n\s+version:/u,
+    )
   })
 
   it('runs compatibility checks daily without live credentials and deduplicates failure issues', () => {

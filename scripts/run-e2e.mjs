@@ -31,14 +31,39 @@ const dshVersion = process.env.DSH_SPEECH_DSH_VERSION ?? compatibility.testedVer
 if (typeof dshVersion !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(dshVersion)) {
   throw new Error('DSH_SPEECH_DSH_VERSION must be a valid semantic version')
 }
+const dshDlxArgs = [
+  'dlx',
+  `--package=@deepseek-ai/dsh@${dshVersion}`,
+  ...[
+    '@deepseek-ai/dsh-subprocess-local',
+    '@google/genai',
+    'koffi',
+    'node-pty',
+    'protobufjs',
+  ].map(name => `--allow-build=${name}`),
+  'dsh',
+]
 const children = []
 let interrupted = false
+
+function stopChild(child, signal) {
+  if (child.exitCode !== null) return
+  if (process.platform === 'win32') {
+    child.kill(signal)
+    return
+  }
+  try {
+    process.kill(-child.pid, signal)
+  } catch (error) {
+    if (error?.code !== 'ESRCH') throw error
+  }
+}
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
     interrupted = true
     for (const child of children) {
-      if (child.exitCode === null) child.kill(signal)
+      stopChild(child, signal)
     }
   })
 }
@@ -139,6 +164,7 @@ function start(command, args, options = {}) {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: childEnvironment({ ...options, label: command }),
+    detached: process.platform !== 'win32',
   })
   children.push(child)
   if (typeof options.onStdout === 'function') {
@@ -229,7 +255,7 @@ async function main() {
   const tarball = join(packageDir, filename)
   readFileSync(tarball)
 
-  run('pnpm', [`--package=@deepseek-ai/dsh@${dshVersion}`, 'dlx', 'dsh', 'plugin', '--profile', 'web', 'add', tarball], {
+  run('pnpm', [...dshDlxArgs, 'plugin', '--profile', 'web', 'add', tarball], {
     env: { DSH_HOME: dshHome },
   })
 
@@ -247,7 +273,7 @@ async function main() {
   }
 
   const dshArgs = [
-    `--package=@deepseek-ai/dsh@${dshVersion}`, 'dlx', 'dsh', '--profile', 'web',
+    ...dshDlxArgs, '--profile', 'web',
     ...(mode === 'mock' ? ['--patch', patchFile] : []),
     '--port', String(harnessPort), '--no-open',
   ]
@@ -289,11 +315,11 @@ try {
   console.error(error)
 } finally {
   for (const child of children.reverse()) {
-    if (child.exitCode === null) child.kill('SIGTERM')
+    stopChild(child, 'SIGTERM')
   }
   await Promise.all(children.map(child => child.exitCode !== null ? undefined : new Promise(resolvePromise => {
     child.once('exit', resolvePromise)
-    setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); resolvePromise() }, 3_000).unref()
+    setTimeout(() => { stopChild(child, 'SIGKILL'); resolvePromise() }, 3_000).unref()
   })))
   if (process.env.DSH_SPEECH_E2E_KEEP === '1') {
     console.error(`Preserved E2E directory: ${runRoot}`)
