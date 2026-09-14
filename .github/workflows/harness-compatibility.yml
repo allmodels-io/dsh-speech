@@ -180,9 +180,14 @@ jobs:
         run: |
           set -euo pipefail
           body="$(printf 'The daily compatibility suite passed against **@deepseek-ai/dsh@%s**.\n\n[View the successful workflow run](%s)\n\nThis updates the tested Harness version, exact peer dependencies, development dependencies, and lockfile.' "$DSH_VERSION" "$RUN_URL")"
-          gh pr create --base main --head "$UPDATE_BRANCH" \
-            --title "Support DeepSeek Harness $DSH_VERSION" \
-            --body "$body"
+          existing_pr="$(gh pr list --state open --head "$UPDATE_BRANCH" --json number --jq '.[0].number // empty')"
+          if [[ -z "$existing_pr" ]]; then
+            gh pr create --base main --head "$UPDATE_BRANCH" \
+              --title "Support DeepSeek Harness $DSH_VERSION" \
+              --body "$body"
+          else
+            echo "Compatibility update pull request #$existing_pr already exists."
+          fi
           issue="$(gh issue list --state open --search "\"DeepSeek Harness $DSH_VERSION compatibility tests failed\" in:title" --json number --jq '.[0].number // empty')"
           if [[ -n "$issue" ]]; then
             gh issue comment "$issue" --body "Compatibility now passes. The automated update pull request is ready for review."

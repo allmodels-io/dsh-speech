@@ -38,6 +38,7 @@ describe('GitHub Actions credential boundary', () => {
     expect(compatibility).toContain('DSH_SPEECH_DSH_VERSION: ${{ needs.discover.outputs.candidate }}')
     expect(compatibility).toContain('gh issue list --repo "$GITHUB_REPOSITORY" --state open')
     expect(compatibility).toContain('gh issue create --repo "$GITHUB_REPOSITORY"')
+    expect(compatibility).toContain('gh pr list --state open --head "$UPDATE_BRANCH"')
     expect(compatibility).toContain('permissions:\n      contents: read\n      issues: write')
     expect(compatibility).not.toMatch(/secrets\.(?:ALLMODELS_API_KEY|DEEPSEEK_API_KEY)/u)
     expect(compatibility).not.toContain('test:e2e:live')
