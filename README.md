@@ -56,7 +56,7 @@ When the agent finishes, the plugin turns its final message into a short spoken 
 
 ## Compatibility
 
-- DeepSeek Harness web profile `0.1.2-rc.1`
+- DeepSeek Harness web profile `0.1.5-rc.2`
 - Node.js `^22.19.0 || >=24.0.0`
 - Local DeepSeek Harness web client
 
