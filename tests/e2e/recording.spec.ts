@@ -4,6 +4,7 @@ import {
   connectMockCredential,
   expectComposerText,
   expectBoxesDoNotOverlap,
+  expectSessionMicrophonePlacement,
   loadHarness,
   microphoneButton,
   waitForPartial,
@@ -139,4 +140,18 @@ test('Cancel discards every active transcription change and restores the origina
   await expect(input).toBeEditable()
   await expectComposerText(input, 'Keep this exact draft')
   await expect(page.locator('.dsh-speech-recording-takeover')).toHaveCount(0)
+})
+
+test('microphone selector remains usable after an assistant answer', async ({ page }) => {
+  await composerInput(page).fill('Give a short greeting.')
+  await page.getByRole('button', { name: 'Send message' }).click()
+  await expect(page.locator('[data-slot="conversation.session"]')).toContainText('Mock assistant answer.')
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeVisible()
+
+  await microphoneButton(page).click()
+  await waitForPartial(page, 'hello world')
+  await expectSessionMicrophonePlacement(page)
+  await page.getByRole('button', { name: 'Cancel voice input' }).click()
+  await expectComposerText(composerInput(page), '')
+  await expect(page.locator('.dsh-speech-device-dock')).toHaveCount(0)
 })

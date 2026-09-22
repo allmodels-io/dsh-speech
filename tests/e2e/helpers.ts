@@ -133,3 +133,34 @@ export function expectBoxesDoNotOverlap(left: { x: number; y: number; width: num
   const overlapY = Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y)
   expect(overlapX <= 0 || overlapY <= 0).toBe(true)
 }
+
+export async function expectSessionMicrophonePlacement(page: Page): Promise<void> {
+  const composer = page.locator('[data-slot="conversation.composer"]')
+  const dock = composer.locator('[data-slot="conversation.composer.dock"]')
+  const selector = dock.locator('.dsh-speech-device-dock')
+  await expect(dock).toBeVisible()
+  // Assert the user-facing control, not the wording of Harness's optional statistics.
+  await expect(selector, 'An existing session must retain its microphone selector while recording').toBeVisible()
+  await expect(composer.locator('.dsh-speech-device-dock')).toHaveCount(1)
+  const trigger = selector.getByRole('button', { name: /^Microphone:/u })
+  await expect(trigger).toBeEnabled()
+  const selectorBox = (await selector.boundingBox())!
+  const viewport = page.viewportSize()!
+  expect(selectorBox.x).toBeGreaterThanOrEqual(0)
+  expect(selectorBox.y).toBeGreaterThanOrEqual(0)
+  expect(selectorBox.x + selectorBox.width).toBeLessThanOrEqual(viewport.width)
+  expect(selectorBox.y + selectorBox.height).toBeLessThanOrEqual(viewport.height)
+
+  const neighbors = composer.locator('button:visible')
+  for (const control of await neighbors.all()) {
+    if (await control.evaluate(element => element.closest('.dsh-speech-device-dock') !== null)) continue
+    const box = await control.boundingBox()
+    if (box !== null) expectBoxesDoNotOverlap(selectorBox, box)
+  }
+  await trigger.focus()
+  await page.keyboard.press('Enter')
+  const menu = page.getByRole('menu', { name: 'Microphone' })
+  await expect(menu).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+}
