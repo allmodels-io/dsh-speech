@@ -44,6 +44,21 @@ const catalog = {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${host}:${port}`)
   if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true })
+  // Exercise the real Harness answer/composer lifecycle without live LLM credentials.
+  if (req.method === 'POST' && url.pathname === '/deepseek/chat/completions') {
+    if (req.headers.authorization !== 'Bearer mock-deepseek-key') return json(res, 401, { message: 'Unauthorized' })
+    let body = ''
+    for await (const chunk of req) body += chunk
+    const request = JSON.parse(body)
+    const completion = {
+      id: 'mock-completion', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: request.model,
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+    res.write(`data: ${JSON.stringify({ ...completion, choices: [{ index: 0, delta: { role: 'assistant', content: 'Mock assistant answer.' }, finish_reason: null }] })}\n\n`)
+    res.write(`data: ${JSON.stringify({ ...completion, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 } })}\n\n`)
+    res.end('data: [DONE]\n\n')
+    return
+  }
   if (req.method === 'GET' && url.pathname === '/v1/providers') return json(res, 200, catalog)
   if (req.method === 'GET' && url.pathname === '/account/balance') {
     return authorized(req)

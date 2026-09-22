@@ -282,6 +282,7 @@ async function main() {
     env: {
       DSH_HOME: dshHome,
       DSH_TELEMETRY_MODE: 'DISABLED',
+      ...(mode === 'mock' ? { DEEPSEEK_BASE_URL: `http://127.0.0.1:${String(mockPort)}/deepseek` } : {}),
     },
     allowSecrets: true,
     secrets: mode === 'mock' ? { DEEPSEEK_API_KEY: 'mock-deepseek-key' } : liveSecrets,

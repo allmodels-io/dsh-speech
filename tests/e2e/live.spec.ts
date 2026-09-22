@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { composerInput, loadHarness, microphoneButton, openSpeechSettings } from './helpers.ts'
+import { composerInput, expectSessionMicrophonePlacement, loadHarness, microphoneButton, openSpeechSettings } from './helpers.ts'
 
 test('real AllModels and DeepSeek credentials support a trusted main-branch smoke run', async ({ page }) => {
   test.setTimeout(120_000)
@@ -33,19 +33,6 @@ test('real AllModels and DeepSeek credentials support a trusted main-branch smok
 
   await microphoneButton(page).click()
   await expect(page.locator('.dsh-speech-recording-canvas')).toBeVisible({ timeout: 30_000 })
-  const metrics = page.locator('[data-slot="conversation.composer.dock"] > *').filter({ hasText: 'TTFT' }).first()
-  await expect(metrics).toContainText('TTFT')
-  const separator = page.locator('.dsh-speech-device-separator')
-  const selector = page.locator('.dsh-speech-device-dock[data-variant="metrics"]')
-  await expect(separator).toHaveText('|')
-  await expect(selector).toBeVisible()
-  const [metricsBox, separatorBox, selectorBox] = await Promise.all([
-    metrics.boundingBox(), separator.boundingBox(), selector.boundingBox(),
-  ])
-  expect(metricsBox).not.toBeNull()
-  expect(separatorBox).not.toBeNull()
-  expect(selectorBox).not.toBeNull()
-  expect(separatorBox!.x).toBeGreaterThan(metricsBox!.x)
-  expect(selectorBox!.x).toBeGreaterThan(separatorBox!.x)
+  await expectSessionMicrophonePlacement(page)
   await page.getByRole('button', { name: 'Cancel voice input' }).click()
 })

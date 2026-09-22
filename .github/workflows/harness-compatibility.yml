@@ -109,6 +109,16 @@ jobs:
         env:
           DSH_SPEECH_DSH_VERSION: ${{ needs.discover.outputs.candidate }}
         run: pnpm test:e2e
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: playwright-compatibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   report-failure:
     needs: [discover, compatibility-test]
